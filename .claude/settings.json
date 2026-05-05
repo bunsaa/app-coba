@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"Log out\\\\|logout\\\\|UserInfo\\\\|UserMenu\\\\|dropdown\")",
+      "Bash(xargs grep -l \"forgot\\\\|ForgotPassword\\\\|reset\")",
+      "Read(//c/Users/Ukfia/Downloads/**)",
+      "Bash(pdftoppm -v)",
+      "Bash(xargs grep -l \"analisis\\\\|numerator\\\\|denominator\\\\|rtl\")",
+      "Read(//c/laragon/etc/**)",
+      "Read(//c/laragon/bin/mysql/mysql-8.4.3-winx64/**)",
+      "Bash(net stop MySQL84)",
+      "Bash(net start MySQL84)",
+      "Bash(sc query state= all)",
+      "Bash(./bin/mysql.exe -u root --password=\"\" -e \"USE app_coba; SELECT COUNT\\(*\\) FROM indikators;\")",
+      "Bash(./bin/mysql.exe -u root --password=\"\" -e \"SHOW DATABASES;\")",
+      "Bash(node -e \":*)",
+      "Bash(python -c \"import json,sys; m=json.load\\(sys.stdin\\); keys=[k for k in m if ''Indikator'' in k]; print\\(keys\\)\")",
+      "Bash(./bin/mysql.exe -u root contoh -e \"ALTER TABLE indikators MODIFY COLUMN satuan ENUM\\(''persen'',''permil'',''rata-rata'',''kejadian'',''peserta'',''dokumen''\\) DEFAULT ''persen'';\")",
+      "Bash(./bin/mysql.exe -u root contoh -e \"DESCRIBE indikators; DESCRIBE capaian_indikators;\")",
+      "Bash(grep -n \"berlaku\\\\|aktif_tw\\\\|berlaku_tw\" database/migrations/*.php)",
+      "Bash(./bin/mysql.exe -u root contoh -e \"SELECT COUNT\\(*\\) as total, SUM\\(berlaku_tw IS NOT NULL\\) as has_berlaku_tw FROM indikators;\")"
+    ],
+    "additionalDirectories": [
+      "c:\\laragon\\bin\\mysql\\mysql-8.4.3-winx64"
+    ]
+  }
+}
