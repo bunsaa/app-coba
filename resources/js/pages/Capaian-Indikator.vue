@@ -2,9 +2,11 @@
 import AppLayout from '@/layouts/AppLayout.vue';
 import type { BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/vue3';
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import axios from 'axios';
-import { ChevronLeft, ChevronRight, MessageSquare, Upload, Eye } from 'lucide-vue-next';
+import { ChevronLeft, ChevronRight, MessageSquare, Upload, Eye, Clock } from 'lucide-vue-next';
+import { registerAutoSave } from '@/composables/useAutoSaveRegistry';
+import AnalisisHistoryPopup, { type AnalisisHistoryEntry } from '@/components/AnalisisHistoryPopup.vue';
 
 interface TimUnit {
   id: number;
@@ -140,6 +142,7 @@ type Indicator = {
   a: Record<MonthKey, MonthApproval>;
   komentar: Record<MonthKey, MonthKomentar>;
   analisisRtl: Record<MonthKey, MonthAnalisisRtl>;
+  analisisRtlHistory: Record<MonthKey, AnalisisHistoryEntry[]>;
   rejectionHistory: RejectionHistoryEntry[];
 };
 
@@ -153,7 +156,16 @@ const currentMonthKey = ref<MonthKey>(idxToKey(props.currentMonth - 1));
 const viewMonthKey = computed<MonthKey>(() => idxToKey((props.viewMonth || props.currentMonth) - 1));
 const isViewingCurrentMonth = computed(() => Number(props.viewMonth) === Number(props.currentMonth) && Number(props.tahun) === Number(props.currentYear));
 const selectedUnitCode = ref(props.selectedUnit?.kode_unit || '');
-const selectedTimUnitRef = ref(props.selectedTimUnit || '');
+
+// PJ Data auto-select their own tim; otherwise use the URL param
+const _initTimUnit = (): string => {
+  const role = props.userRole ?? '';
+  if (role.startsWith('PJ Data - ')) {
+    return role.replace('PJ Data - ', '');
+  }
+  return props.selectedTimUnit || '';
+};
+const selectedTimUnitRef = ref(_initTimUnit());
 const data = ref<Indicator[]>(props.capaianData);
 
 // Searchable unit dropdown
@@ -558,9 +570,18 @@ const hasTimUnits = computed(() => {
   return props.selectedUnit?.tim_units && props.selectedUnit.tim_units.length > 0;
 });
 
+// Detect PJ Data role and extract their tim name
+const isPjDataRole = computed(() => (props.userRole ?? '').startsWith('PJ Data - '));
+const pjDataTimName = computed(() => isPjDataRole.value ? (props.userRole ?? '').replace('PJ Data - ', '') : '');
+
 // Computed: list tim units untuk dropdown
+// PJ Data hanya bisa melihat tim miliknya sendiri
 const availableTimUnits = computed(() => {
-  return props.selectedUnit?.tim_units || [];
+  const all = props.selectedUnit?.tim_units || [];
+  if (isPjDataRole.value && pjDataTimName.value) {
+    return all.filter((t: any) => t.nama_tim === pjDataTimName.value);
+  }
+  return all;
 });
 
 // Computed: apakah unit sudah dipilih
@@ -758,8 +779,8 @@ async function doMarkRevised(ind: Indicator) {
 // Check if Analisis/RTL can be edited for specific indicator
 // Must be editable period AND indicator not yet approved for current month
 function canEditAnalisis(ind: Indicator): boolean {
-  // Kepala unit tidak boleh input analisis/RTL
-  if (isKepalaUnit.value) return false;
+  // Hanya PJ Data dan admin yang boleh input (canInput dari backend)
+  if (!props.canInput) return false;
   if (!isAnalisisEditable()) return false;
   // Jika ada komentar admin, izinkan edit meski sudah approve
   if (hasKomentarAdmin(ind, currentMonthKey.value)) return true;
@@ -780,8 +801,8 @@ function monthLabel(m: MonthKey){
 const isKepalaUnit = computed(() => props.userRole === 'kepala_unit');
 
 function isWindowOpen(m: MonthKey){
-  // Kepala unit tidak boleh input data
-  if (isKepalaUnit.value) return false;
+  // Hanya PJ Data dan admin yang boleh input (canInput dari backend)
+  if (!props.canInput) return false;
 
   // Hanya bisa input jika:
   // 1. Bulan sama dengan bulan berjalan
@@ -891,6 +912,15 @@ const targetField = ref<'N'|'D'>('N');
 const editingId = ref<number | null>(null);
 const inputNilai = ref<number | null>(null);
 
+// Auto-save: track analisis/RTL yang belum tersimpan (user masih mengetik)
+const analysisDirtySet = ref(new Set<number>())
+const detailAnalisisDirty = ref(false)
+
+// History popup state
+const activeHistoryInd = ref<number | null>(null)
+const activeHistoryBulan = ref<MonthKey | null>(null)
+const detailAnalisisHistory = ref<AnalisisHistoryEntry[]>([])
+
 const warn = ref<{show:boolean; message:string}>({ show:false, message:'Jadwal input capaian indikator tidak dibuka pada tanggal bulan dipilih' });
 function openWarn(msg?:string){ warn.value.message = msg || warn.value.message; warn.value.show=true; }
 function closeWarn(){ warn.value.show=false; }
@@ -904,7 +934,8 @@ function displayVal(ind: Indicator, m: MonthKey, field: 'N'|'D'){
 }
 
 function openCell(ind: Indicator, month: MonthKey, field: 'N'|'D'){
-  if (!isWindowOpen(month)) { openWarn(); return; }
+  if (!props.canInput) { openWarn('Anda tidak memiliki kewenangan untuk mengisi data capaian indikator.'); return; }
+  if (!isWindowOpen(month)) { openWarn('Jadwal input capaian indikator tidak dibuka pada tanggal bulan dipilih.'); return; }
   if (isValidated(ind, month)) { openWarn('Data bulan ini sudah divalidasi, tidak dapat diubah.'); return; }
   // Izinkan edit jika ada komentar dari admin mutu (meski sudah approve)
   if (isApproved(ind, month) && !hasKomentarAdmin(ind, month)) { openWarn('Data bulan ini sudah di-approve, tidak dapat diubah.'); return; }
@@ -924,7 +955,8 @@ function saveCell(){
   const ind = data.value.find(x=>x.id===editingId.value);
   if (!ind) return;
   if (inputNilai.value==null || Number.isNaN(inputNilai.value)){ alert('Nilai wajib diisi'); return; }
-  if (!isWindowOpen(infoBulan.value)) { openWarn(); return; }
+  if (!props.canInput) { openWarn('Anda tidak memiliki kewenangan untuk mengisi data capaian indikator.'); return; }
+  if (!isWindowOpen(infoBulan.value)) { openWarn('Jadwal input capaian indikator tidak dibuka pada tanggal bulan dipilih.'); return; }
   if (isValidated(ind, infoBulan.value)) { openWarn('Data bulan ini sudah divalidasi, tidak dapat diubah.'); return; }
   if (isApproved(ind, infoBulan.value) && !hasKomentarAdmin(ind, infoBulan.value)) { openWarn('Data bulan ini sudah di-approve, tidak dapat diubah.'); return; }
 
@@ -972,7 +1004,8 @@ function saveCell(){
 }
 
 function onUpload(ind: Indicator, m: MonthKey, e: Event){
-  if (!isWindowOpen(m)) { openWarn(); return; }
+  if (!props.canInput) { openWarn('Anda tidak memiliki kewenangan untuk mengisi data capaian indikator.'); return; }
+  if (!isWindowOpen(m)) { openWarn('Jadwal input capaian indikator tidak dibuka pada tanggal bulan dipilih.'); return; }
   if (isValidated(ind, m)) { openWarn('Lampiran tidak bisa diganti karena bulan ini sudah divalidasi.'); return; }
 
   const input = e.target as HTMLInputElement;
@@ -1050,6 +1083,13 @@ function saveAnalisis(ind: Indicator){
   })
   .then(response => {
     console.log('Analisis saved:', response.data);
+    analysisDirtySet.value.delete(ind.id)
+    if (response.data.analisisHistory && !ind.analisisRtlHistory) {
+      ind.analisisRtlHistory = {} as Record<MonthKey, AnalisisHistoryEntry[]>;
+    }
+    if (response.data.analisisHistory) {
+      ind.analisisRtlHistory[currentMonthKey.value] = response.data.analisisHistory;
+    }
   })
   .catch((error: unknown) => {
     console.error('Error saving analisis:', error);
@@ -1316,6 +1356,7 @@ async function viewIndicatorDetail(ind: TimIndikatorDetail) {
       v: indData.validations || {},
       komentar: indData.komentars || {},
       analisisRtl: indData.analisisRtl || {},
+      analisisRtlHistory: indData.analisisRtlHistory || {},
       rejectionHistory: indData.rejectionHistory || [],
     } as Indicator;
 
@@ -1328,6 +1369,7 @@ async function viewIndicatorDetail(ind: TimIndikatorDetail) {
     const mk = viewMonthKey.value;
     detailAnalisis.value = indData.analisisRtl?.[mk]?.analisis || '';
     detailRtl.value = indData.analisisRtl?.[mk]?.rtl || '';
+    detailAnalisisHistory.value = indData.analisisRtlHistory?.[mk] ?? [];
   } catch (error) {
     console.error('Error loading indicator detail:', error);
     alert('Gagal memuat detail indikator');
@@ -1351,7 +1393,7 @@ async function saveDetailAnalisis() {
   if (!viewingIndicatorFullData.value || !isViewingCurrentMonth.value) return;
   savingDetailAnalisis.value = true;
   try {
-    await axios.post('/capaian-indikator/analisis', {
+    const resp = await axios.post('/capaian-indikator/analisis', {
       indikator_id: viewingIndicatorFullData.value.id,
       kode_unit: selectedUnitCode.value,
       tahun: props.tahun,
@@ -1360,6 +1402,10 @@ async function saveDetailAnalisis() {
       rtl: detailRtl.value,
     });
     console.log('Detail analisis/RTL saved');
+    detailAnalisisDirty.value = false
+    if (resp.data.analisisHistory) {
+      detailAnalisisHistory.value = resp.data.analisisHistory;
+    }
   } catch (error: unknown) {
     console.error('Error saving analisis:', error);
     if (axios.isAxiosError(error)) {
@@ -1655,6 +1701,77 @@ function navigateQuarter(direction: 'prev' | 'next') {
     preserveScroll: false,
   });
 }
+
+// ===== AUTO-SAVE SEBELUM AUTO-LOGOUT =====
+const _unregisterAutoSave = registerAutoSave(async () => {
+  // 1. Jika modal input N/D sedang terbuka dengan nilai yang belum disimpan
+  if (showModal.value && editingId.value !== null &&
+      inputNilai.value !== null && !Number.isNaN(inputNilai.value) &&
+      props.canInput) {
+    const ind = data.value.find(x => x.id === editingId.value)
+    if (ind && isWindowOpen(infoBulan.value) && !isValidated(ind, infoBulan.value)) {
+      try {
+        const response = await axios.post('/capaian-indikator/save', {
+          indikator_id: ind.id,
+          kode_unit: selectedUnitCode.value,
+          tahun: props.tahun,
+          bulan: infoBulan.value,
+          field: targetField.value,
+          nilai: inputNilai.value,
+        })
+        ind.m[infoBulan.value][targetField.value] = Number(inputNilai.value)
+        const autoIds: number[] = response.data.autoFilledIds ?? []
+        autoIds.forEach((autoId: number) => {
+          const autoInd = data.value.find(x => x.id === autoId)
+          if (autoInd && autoInd.m[infoBulan.value]) {
+            autoInd.m[infoBulan.value][targetField.value] = Number(inputNilai.value)
+          }
+        })
+      } catch (e) {
+        console.error('Auto-save N/D gagal:', e)
+      }
+    }
+  }
+
+  // 2. Simpan analisis/RTL yang masih dirty (belum tersimpan via @blur)
+  for (const indId of analysisDirtySet.value) {
+    const ind = data.value.find(x => x.id === indId)
+    if (ind && isAnalisisEditable()) {
+      try {
+        await axios.post('/capaian-indikator/analisis', {
+          indikator_id: ind.id,
+          kode_unit: selectedUnitCode.value,
+          tahun: props.tahun,
+          bulan: currentMonthKey.value,
+          analisis: ind.analisisRtl[currentMonthKey.value]?.analisis || '',
+          rtl: ind.analisisRtl[currentMonthKey.value]?.rtl || '',
+        })
+        analysisDirtySet.value.delete(indId)
+      } catch (e) {
+        console.error('Auto-save analisis gagal:', e)
+      }
+    }
+  }
+
+  // 3. Simpan detail analisis (modal kepala unit) jika masih dirty
+  if (detailAnalisisDirty.value && viewingIndicatorFullData.value && isViewingCurrentMonth.value) {
+    try {
+      await axios.post('/capaian-indikator/analisis', {
+        indikator_id: viewingIndicatorFullData.value.id,
+        kode_unit: selectedUnitCode.value,
+        tahun: props.tahun,
+        bulan: viewMonthKey.value,
+        analisis: detailAnalisis.value,
+        rtl: detailRtl.value,
+      })
+      detailAnalisisDirty.value = false
+    } catch (e) {
+      console.error('Auto-save detail analisis gagal:', e)
+    }
+  }
+})
+
+onUnmounted(_unregisterAutoSave)
 </script>
 
 <template>
@@ -1708,7 +1825,7 @@ function navigateQuarter(direction: 'prev' | 'next') {
               </div>
             </div>
 
-            <!-- Searchable Tim Unit Dropdown -->
+            <!-- Searchable Tim Unit Dropdown (disembunyikan untuk PJ Data karena sudah auto-select) -->
             <div v-if="hasTimUnits">
               <label class="block text-xs font-medium text-gray-600 mb-1">Pilih Tim Unit</label>
               <div class="relative">
@@ -1716,10 +1833,12 @@ function navigateQuarter(direction: 'prev' | 'next') {
                   <input
                     :value="timDropdownOpen ? timSearchQuery : timDisplayName"
                     @input="timSearchQuery = ($event.target as HTMLInputElement).value"
-                    @focus="openTimDropdown"
+                    @focus="isPjDataRole ? undefined : openTimDropdown()"
                     @blur="closeTimDropdown"
                     :placeholder="timDisplayName || '-- Pilih atau cari tim --'"
-                    class="w-full rounded-lg border border-blue-300 px-3 py-2 pr-8 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 focus:outline-none bg-white cursor-text"
+                    :readonly="isPjDataRole"
+                    :class="isPjDataRole ? 'bg-gray-100 cursor-not-allowed text-gray-500' : 'bg-white cursor-text focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200'"
+                    class="w-full rounded-lg border border-blue-300 px-3 py-2 pr-8 text-sm focus:outline-none"
                   />
                   <svg class="pointer-events-none absolute right-2 top-2.5 h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
@@ -2272,9 +2391,22 @@ function navigateQuarter(direction: 'prev' | 'next') {
                   </td>
                   <td class="border px-2 py-2" :rowspan="2">
                     <div class="grid gap-2">
+                      <!-- History icon -->
+                      <div class="flex items-center justify-end">
+                        <button
+                          v-if="ind.analisisRtlHistory?.[currentMonthKey]?.length"
+                          @click.stop="activeHistoryInd = ind.id; activeHistoryBulan = currentMonthKey"
+                          class="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 transition-colors"
+                          title="Lihat riwayat perubahan"
+                        >
+                          <Clock :size="12" />
+                          {{ ind.analisisRtlHistory[currentMonthKey].length }}
+                        </button>
+                      </div>
                       <textarea
                         v-model="ind.analisisRtl[currentMonthKey].analisis"
                         @blur="saveAnalisis(ind)"
+                        @input="analysisDirtySet.add(ind.id)"
                         :disabled="!canEditAnalisis(ind)"
                         :class="{'opacity-50 cursor-not-allowed': !canEditAnalisis(ind)}"
                         rows="2"
@@ -2284,6 +2416,7 @@ function navigateQuarter(direction: 'prev' | 'next') {
                       <textarea
                         v-model="ind.analisisRtl[currentMonthKey].rtl"
                         @blur="saveAnalisis(ind)"
+                        @input="analysisDirtySet.add(ind.id)"
                         :disabled="!canEditAnalisis(ind)"
                         :class="{'opacity-50 cursor-not-allowed': !canEditAnalisis(ind)}"
                         rows="2"
@@ -2291,6 +2424,13 @@ function navigateQuarter(direction: 'prev' | 'next') {
                         placeholder="RTL..."
                       ></textarea>
                     </div>
+                    <!-- History popup for this cell -->
+                    <AnalisisHistoryPopup
+                      v-if="activeHistoryInd === ind.id && activeHistoryBulan === currentMonthKey"
+                      :history="ind.analisisRtlHistory[currentMonthKey]"
+                      :bulan="currentMonthKey"
+                      @close="activeHistoryInd = null; activeHistoryBulan = null"
+                    />
                   </td>
                 </tr>
 
@@ -2700,14 +2840,32 @@ function navigateQuarter(direction: 'prev' | 'next') {
           <div class="mt-4 rounded-lg border border-gray-200 overflow-hidden">
             <div class="bg-gray-50 px-4 py-2 border-b flex items-center justify-between">
               <h4 class="text-sm font-semibold text-gray-700">Analisis & RTL - {{ monthLabel(viewMonthKey) }}</h4>
-              <span v-if="savingDetailAnalisis" class="text-xs text-purple-600 animate-pulse">Menyimpan...</span>
+              <div class="flex items-center gap-3">
+                <span v-if="savingDetailAnalisis" class="text-xs text-purple-600 animate-pulse">Menyimpan...</span>
+                <button
+                  v-if="detailAnalisisHistory.length"
+                  @click="activeHistoryInd = -1; activeHistoryBulan = viewMonthKey"
+                  class="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 transition-colors"
+                  title="Lihat riwayat perubahan"
+                >
+                  <Clock :size="13" />
+                  Riwayat ({{ detailAnalisisHistory.length }})
+                </button>
+              </div>
             </div>
+            <AnalisisHistoryPopup
+              v-if="activeHistoryInd === -1 && activeHistoryBulan === viewMonthKey"
+              :history="detailAnalisisHistory"
+              :bulan="viewMonthKey"
+              @close="activeHistoryInd = null; activeHistoryBulan = null"
+            />
             <div class="p-4 grid gap-3">
               <div>
                 <label class="block text-xs font-medium text-gray-600 mb-1">Analisis</label>
                 <textarea
                   v-model="detailAnalisis"
                   @blur="saveDetailAnalisis"
+                  @input="detailAnalisisDirty = true"
                   rows="3"
                   class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                   placeholder="Tulis analisis..."
@@ -2720,6 +2878,7 @@ function navigateQuarter(direction: 'prev' | 'next') {
                 <textarea
                   v-model="detailRtl"
                   @blur="saveDetailAnalisis"
+                  @input="detailAnalisisDirty = true"
                   rows="3"
                   class="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                   placeholder="Tulis RTL..."
@@ -2789,7 +2948,7 @@ function navigateQuarter(direction: 'prev' | 'next') {
                 ({{ viewingIndicatorDetail.recommendation.gap }})
               </span>
             </div>
-            <p class="text-sm leading-relaxed"
+            <p class="text-sm leading-relaxed text-justify"
               :class="{
                 'text-green-800': viewingIndicatorDetail.recommendation.color === 'green',
                 'text-red-800':   viewingIndicatorDetail.recommendation.color === 'red',
@@ -2926,7 +3085,9 @@ function navigateQuarter(direction: 'prev' | 'next') {
                             }"></span>
                           {{ ind.recommendation.status }}
                         </span>
-                        <button @click.stop="activeRecInd = ind; showRejectInput = false"
+                        <button
+                          v-if="isViewingCurrentMonth"
+                          @click.stop="activeRecInd = ind; showRejectInput = false"
                           class="text-[10px] text-blue-500 hover:text-blue-700 underline">
                           Lihat saran
                         </button>
@@ -3035,7 +3196,7 @@ function navigateQuarter(direction: 'prev' | 'next') {
                   — {{ activeRecInd.recommendation.gap }}
                 </span>
               </div>
-              <p class="text-xs leading-relaxed"
+              <p class="text-xs leading-relaxed text-justify"
                 :class="{
                   'text-green-800': activeRecInd.recommendation.color === 'green',
                   'text-red-800':   activeRecInd.recommendation.color === 'red',

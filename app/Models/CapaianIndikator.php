@@ -8,12 +8,14 @@ class CapaianIndikator extends Model
     
     protected $fillable = [
         'indikator_id',
+        'nama_indikator',
         'kode_unit',
         'tahun',
         'jan_n', 'jan_d', 'feb_n', 'feb_d', 'mar_n', 'mar_d',
         'apr_n', 'apr_d', 'may_n', 'may_d', 'jun_n', 'jun_d',
         'jul_n', 'jul_d', 'aug_n', 'aug_d', 'sep_n', 'sep_d',
         'oct_n', 'oct_d', 'nov_n', 'nov_d', 'des_n', 'des_d',
+        'created_by', 'updated_by',
         'jan_validated', 'feb_validated', 'mar_validated',
         'apr_validated', 'may_validated', 'jun_validated',
         'jul_validated', 'aug_validated', 'sep_validated',
@@ -60,6 +62,7 @@ class CapaianIndikator extends Model
         'nov_analisis', 'nov_rtl', 'nov_rekomendasi',
         'des_analisis', 'des_rtl', 'des_rekomendasi',
         'rejection_history',
+        'analisis_rtl_history',
         'komentar',
         'komentar_dibaca',
     ];
@@ -116,6 +119,7 @@ class CapaianIndikator extends Model
         'des_rejected_at' => 'datetime',
         'komentar_dibaca' => 'boolean',
         'rejection_history' => 'array',
+        'analisis_rtl_history' => 'array',
     ];
     
     public function indikator()

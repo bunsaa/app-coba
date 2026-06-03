@@ -2,8 +2,10 @@
 import AppLayout from '@/layouts/AppLayout.vue';
 import type { BreadcrumbItem } from '@/types';
 import { Head, router } from '@inertiajs/vue3';
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onUnmounted } from 'vue';
 import axios from 'axios';
+import { registerAutoSave } from '@/composables/useAutoSaveRegistry';
+import AnalisisHistoryPopup, { type AnalisisHistoryEntry } from '@/components/AnalisisHistoryPopup.vue';
 import {
   Eye,
   CheckCircle,
@@ -15,7 +17,8 @@ import {
   Info,
   Send,
   Trash2,
-  Sparkles
+  Sparkles,
+  Clock
 } from 'lucide-vue-next';
 
 interface UnitValidasi {
@@ -58,6 +61,7 @@ interface DetailCapaian {
   rekomendasi: string;
   komentar_dibaca: boolean;
   komentar_history: KomentarHistory[];
+  analisis_rtl_history?: AnalisisHistoryEntry[];
 }
 
 interface MonthOption {
@@ -97,6 +101,11 @@ const loading = ref(false);
 const selectedIndikator = ref<DetailCapaian | null>(null);
 const komentarText = ref('');
 const selectedMonth = ref(props.bulanDipilih);
+
+// Auto-save: track analisis/RTL yang belum tersimpan
+const analysisDirtySet = ref(new Set<number>())
+// History popup state
+const activeHistoryItemId = ref<number | null>(null)
 const selectedYear = ref(props.tahunDipilih);
 
 // Rekomendasi: generate template berdasarkan hasil vs standar
@@ -122,11 +131,17 @@ function meetStandar(hasil: number, standar: string): boolean {
   return true;
 }
 
+// Deteksi indikator sentinel event: standar literalnya "0" atau "= 0"
+function isSentinelIndicator(standar: string): boolean {
+  const trimmed = standar.trim();
+  if (trimmed === '0') return true;
+  const p = parseStandar(trimmed);
+  return p !== null && p.op === '=' && p.val === 0;
+}
+
 function buildRekomendasi(item: DetailCapaian): string {
   if (item.hasil === null) return '';
 
-  // Gunakan nilai asli untuk perbandingan, tampilan dikap 100% untuk persen
-  const terpenuhi = meetStandar(item.hasil, item.standar);
   const hasilDisplay = item.satuan === 'persen'
     ? Math.min(Math.ceil(item.hasil), 100)
     : Math.ceil(item.hasil);
@@ -135,23 +150,56 @@ function buildRekomendasi(item: DetailCapaian): string {
     : (item.satuan_waktu ? ` ${item.satuan_waktu}` : '');
   const capaianStr = `${hasilDisplay}${suffix}`;
 
-  // Hitung selisih untuk teks rekomendasi yang lebih informatif
-  const parsed = parseStandar(item.standar);
-  const selisihTeks = parsed && item.satuan === 'persen'
-    ? ` (selisih ${Math.abs(Math.ceil(item.hasil) - parsed.val)}% dari standar)`
-    : '';
+  let teks = '';
 
-  if (!terpenuhi) {
-    return `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr}${selisihTeks} belum memenuhi standar ${item.standar} yang ditetapkan. ` +
-      `Perlu dilakukan evaluasi menyeluruh terhadap proses pelayanan untuk mengidentifikasi faktor penghambat. ` +
-      `Unit disarankan menyusun rencana tindak lanjut konkret dan melakukan pemantauan lebih intensif agar capaian mencapai standar ${item.standar} sesuai Pergub No. 20 Tahun 2016 dan Permenkes No. 30 Tahun 2022. ` +
-      `Laporkan perkembangan secara berkala kepada pimpinan unit untuk mendukung perbaikan yang berkesinambungan.`;
+  // Logika khusus untuk indikator sentinel event (standar = 0)
+  if (isSentinelIndicator(item.standar)) {
+    if (item.hasil === 0) {
+      teks = `Capaian indikator "${item.indikator}" bulan ini sebesar 0 kejadian, telah memenuhi standar yang ditetapkan. ` +
+        `Pertahankan kondisi ini dengan menjaga kepatuhan terhadap prosedur dan protokol yang berlaku. ` +
+        `Lakukan evaluasi rutin dan edukasi berkala kepada staf untuk mencegah terjadinya kejadian serupa.`;
+    } else if (item.hasil <= 10) {
+      teks = `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr} tergolong kategori risiko rendah (0,01–10%). ` +
+        `Meskipun masih dalam kategori rendah, setiap kejadian tetap harus diinvestigasi. ` +
+        `Lakukan analisis akar masalah (root cause analysis), dokumentasikan temuan, dan susun langkah pencegahan agar tidak terjadi pengulangan. ` +
+        `Laporkan hasil investigasi kepada pimpinan unit secara berkala.`;
+    } else if (item.hasil <= 50) {
+      teks = `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr} tergolong kategori risiko sedang (10–50%). ` +
+        `Segera lakukan evaluasi mendalam terhadap prosedur pelayanan dan identifikasi faktor penyebab. ` +
+        `Susun rencana tindak lanjut terstruktur, tingkatkan supervisi, dan lakukan pelatihan staf yang relevan. ` +
+        `Pantau perkembangan secara intensif dan laporkan kepada pimpinan sebagai prioritas perbaikan mutu.`;
+    } else {
+      teks = `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr} tergolong kategori risiko tinggi (>50%). ` +
+        `Kondisi ini memerlukan penanganan segera dan komprehensif. ` +
+        `Lakukan investigasi menyeluruh, perbaikan sistem, dan terapkan langkah korektif secepat mungkin. ` +
+        `Eskalasikan permasalahan kepada pimpinan unit sebagai prioritas utama dan laporkan rencana perbaikan secara tertulis sesuai ketentuan yang berlaku.`;
+    }
   } else {
-    return `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr} telah memenuhi standar ${item.standar} yang ditetapkan sesuai Pergub No. 20 Tahun 2016 dan Permenkes No. 30 Tahun 2022. ` +
-      `Pertahankan kinerja yang baik ini dengan menjaga konsistensi proses pelayanan. ` +
-      `Lakukan inovasi dan perbaikan berkelanjutan untuk meningkatkan kualitas pelayanan melebihi standar minimum yang ada. ` +
-      `Dokumentasikan praktik terbaik sebagai referensi pengembangan mutu layanan di unit lain.`;
+    // Logika umum untuk indikator non-sentinel
+    const terpenuhi = meetStandar(item.hasil, item.standar);
+    const parsed = parseStandar(item.standar);
+    const selisihTeks = parsed && item.satuan === 'persen'
+      ? ` (selisih ${Math.abs(Math.ceil(item.hasil) - parsed.val)}% dari standar)`
+      : '';
+
+    if (!terpenuhi) {
+      teks = `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr}${selisihTeks} belum memenuhi standar ${item.standar} yang ditetapkan. ` +
+        `Perlu dilakukan evaluasi menyeluruh terhadap proses pelayanan untuk mengidentifikasi faktor penghambat. ` +
+        `Unit disarankan menyusun rencana tindak lanjut konkret dan melakukan pemantauan lebih intensif agar capaian mencapai standar ${item.standar} sesuai Pergub No. 20 Tahun 2016 dan Permenkes No. 30 Tahun 2022. ` +
+        `Laporkan perkembangan secara berkala kepada pimpinan unit untuk mendukung perbaikan yang berkesinambungan.`;
+    } else {
+      teks = `Capaian indikator "${item.indikator}" bulan ini sebesar ${capaianStr} telah memenuhi standar ${item.standar} yang ditetapkan sesuai Pergub No. 20 Tahun 2016 dan Permenkes No. 30 Tahun 2022. ` +
+        `Pertahankan kinerja yang baik ini dengan menjaga konsistensi proses pelayanan. ` +
+        `Lakukan inovasi dan perbaikan berkelanjutan untuk meningkatkan kualitas pelayanan melebihi standar minimum yang ada. ` +
+        `Dokumentasikan praktik terbaik sebagai referensi pengembangan mutu layanan di unit lain.`;
+    }
   }
+
+  if (!item.lampiran) {
+    teks += ` Perhatian: Data lampiran pendukung untuk indikator ini belum dilaporkan. Harap segera mengunggah lampiran yang relevan sebagai bukti pelaporan.`;
+  }
+
+  return teks;
 }
 
 // Pagination & Search
@@ -340,7 +388,7 @@ async function clearKomentar(indikator: DetailCapaian) {
 
 async function saveAnalisisAdmin(indikator: DetailCapaian) {
   try {
-    await axios.post('/validasi-capaian-indikator/save-analisis', {
+    const resp = await axios.post('/validasi-capaian-indikator/save-analisis', {
       indikator_id: indikator.id,
       kode_unit: selectedUnit.value?.unit_kode,
       tahun: props.tahunDipilih,
@@ -350,6 +398,10 @@ async function saveAnalisisAdmin(indikator: DetailCapaian) {
     });
 
     console.log('Analisis/RTL berhasil disimpan');
+    analysisDirtySet.value.delete(indikator.id)
+    if (resp.data.analisisHistory) {
+      indikator.analisis_rtl_history = resp.data.analisisHistory;
+    }
   } catch (error) {
     console.error('Error saving analisis:', error);
     alert('Gagal menyimpan analisis/RTL');
@@ -547,6 +599,38 @@ function closeDetailModal() {
   detailCapaian.value = [];
   allDetailCapaian.value = [];
 }
+
+// ===== AUTO-SAVE SEBELUM AUTO-LOGOUT =====
+const _unregisterAutoSave = registerAutoSave(async () => {
+  // 1. Jika modal komentar terbuka dengan teks yang belum dikirim
+  if (showKomentarModal.value && komentarText.value.trim() && selectedIndikator.value) {
+    try {
+      await axios.post('/validasi-capaian-indikator/send-komentar', {
+        indikator_id: selectedIndikator.value.id,
+        kode_unit: selectedUnit.value?.unit_kode,
+        tahun: props.tahunDipilih,
+        bulan: props.bulanDipilih,
+        komentar: komentarText.value,
+      })
+    } catch (e) {
+      console.error('Auto-save komentar gagal:', e)
+    }
+  }
+
+  // 2. Simpan analisis/RTL yang masih dirty (belum tersimpan via @blur)
+  for (const itemId of analysisDirtySet.value) {
+    const item = detailCapaian.value.find(x => x.id === itemId)
+    if (item) {
+      try {
+        await saveAnalisisAdmin(item)
+      } catch (e) {
+        console.error('Auto-save analisis gagal:', e)
+      }
+    }
+  }
+})
+
+onUnmounted(_unregisterAutoSave)
 </script>
 
 <template>
@@ -983,20 +1067,39 @@ function closeDetailModal() {
                 <!-- Analisis, RTL & Rekomendasi Section -->
                 <div class="mt-4 grid grid-cols-3 gap-4">
                   <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">Analisis</label>
+                    <div class="flex items-center justify-between mb-1">
+                      <label class="block text-xs font-medium text-gray-700">Analisis</label>
+                      <button
+                        v-if="item.analisis_rtl_history?.length"
+                        @click="activeHistoryItemId = item.id"
+                        class="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 transition-colors"
+                        title="Lihat riwayat perubahan"
+                      >
+                        <Clock :size="12" />
+                        {{ item.analisis_rtl_history.length }}
+                      </button>
+                    </div>
                     <textarea
                       v-model="item.analisis"
                       @blur="saveAnalisisAdmin(item)"
+                      @input="analysisDirtySet.add(item.id)"
                       rows="4"
                       class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
                       placeholder="Tulis analisis..."
                     ></textarea>
+                    <AnalisisHistoryPopup
+                      v-if="activeHistoryItemId === item.id"
+                      :history="item.analisis_rtl_history ?? []"
+                      :bulan="String(props.bulanDipilih)"
+                      @close="activeHistoryItemId = null"
+                    />
                   </div>
                   <div>
                     <label class="block text-xs font-medium text-gray-700 mb-1">RTL (Rencana Tindak Lanjut)</label>
                     <textarea
                       v-model="item.rtl"
                       @blur="saveAnalisisAdmin(item)"
+                      @input="analysisDirtySet.add(item.id)"
                       rows="4"
                       class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
                       placeholder="Tulis RTL..."
@@ -1009,7 +1112,7 @@ function closeDetailModal() {
                     </label>
                     <div
                       v-if="item.rekomendasi"
-                      class="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-xs text-gray-700 leading-relaxed"
+                      class="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-xs text-gray-700 leading-relaxed text-justify"
                       style="min-height: 88px; white-space: pre-wrap;"
                     >{{ item.rekomendasi }}</div>
                     <div

@@ -212,10 +212,9 @@ class DashboardController extends Controller
         // Field approve untuk bulan ini
         $approvedField = $fieldBulan . '_approved';
 
-        // Hitung total hasil (N/D × 100) untuk bulan berjalan - HANYA YANG SUDAH APPROVED
+        // Hitung total hasil (N/D × 100) untuk bulan berjalan - SEMUA YANG SUDAH TERISI
         $capaianData = CapaianIndikator::where('tahun', $tahunSekarang)
             ->whereIn('indikator_id', $activeIndikatorIds)
-            ->where($approvedField, true)
             ->whereNotNull($numeratorField)
             ->whereNotNull($denominatorField)
             ->where($denominatorField, '>', 0)
@@ -235,9 +234,9 @@ class DashboardController extends Controller
             }
         }
 
-        // Rata-rata persentase = total hasil / jumlah capaian yang ada
-        $persentaseCapaianBulanan = $jumlahCapaian > 0
-            ? round($totalHasil / $jumlahCapaian, 2)
+        // Persentase = total hasil / TOTAL SEMUA indikator aktif (terisi maupun belum)
+        $persentaseCapaianBulanan = $totalIndikatorAktif > 0
+            ? round($totalHasil / $totalIndikatorAktif, 2)
             : 0;
 
         // Total capaian yang harus masuk
@@ -560,17 +559,15 @@ class DashboardController extends Controller
         // Hitung persentase untuk setiap bulan dalam TW
         $detailTooltip = [];
         $totalPersentaseTW = 0;
-        $jumlahBulanDenganData = 0;
 
         foreach ($bulanDalamTW as $bulan) {
             $numeratorField = $bulan . '_n';
             $denominatorField = $bulan . '_d';
             $approvedFieldBulan = $bulan . '_approved';
 
-            // Hitung total keseluruhan untuk bulan ini - HANYA YANG SUDAH APPROVED
+            // Hitung total keseluruhan untuk bulan ini - SEMUA YANG SUDAH TERISI
             $capaianData = CapaianIndikator::where('tahun', $tahunSekarang)
                 ->whereIn('indikator_id', $activeIndikatorIds)
-                ->where($approvedFieldBulan, true)
                 ->whereNotNull($numeratorField)
                 ->whereNotNull($denominatorField)
                 ->where($denominatorField, '>', 0)
@@ -590,40 +587,37 @@ class DashboardController extends Controller
                 }
             }
 
-            $persentaseBulan = $jumlahCapaian > 0
-                ? round($totalHasil / $jumlahCapaian, 2)
+            // Bagi total semua indikator aktif (bukan hanya yang terisi)
+            $persentaseBulan = $totalIndikatorAktif > 0
+                ? round($totalHasil / $totalIndikatorAktif, 2)
                 : 0;
 
-            if ($jumlahCapaian > 0) {
-                $totalPersentaseTW += $persentaseBulan;
-                $jumlahBulanDenganData++;
-            }
+            // Selalu tambahkan (termasuk 0 jika belum ada data), dibagi 3 di akhir
+            $totalPersentaseTW += $persentaseBulan;
 
-            // Hitung per jenis indikator untuk bulan ini - HANYA YANG SUDAH APPROVED
+            // Hitung per jenis indikator untuk bulan ini - SEMUA YANG SUDAH TERISI
             $detailJenis = [];
             foreach ($indikatorPerJenis as $jenis => $jenisIds) {
                 $capaianJenis = CapaianIndikator::where('tahun', $tahunSekarang)
                     ->whereIn('indikator_id', $jenisIds)
-                    ->where($approvedFieldBulan, true)
                     ->whereNotNull($numeratorField)
                     ->whereNotNull($denominatorField)
                     ->where($denominatorField, '>', 0)
                     ->get();
 
                 $totalHasilJenis = 0;
-                $jumlahCapaianJenis = 0;
+                $totalJenis = count($jenisIds);
 
                 foreach ($capaianJenis as $cap) {
                     $n = $cap->{$numeratorField};
                     $d = $cap->{$denominatorField};
                     if ($d > 0) {
                         $totalHasilJenis += ($n / $d) * 100;
-                        $jumlahCapaianJenis++;
                     }
                 }
 
-                $persentaseJenis = $jumlahCapaianJenis > 0
-                    ? round($totalHasilJenis / $jumlahCapaianJenis, 2)
+                $persentaseJenis = $totalJenis > 0
+                    ? round($totalHasilJenis / $totalJenis, 2)
                     : 0;
 
                 $detailJenis[] = [
@@ -639,10 +633,8 @@ class DashboardController extends Controller
             ];
         }
 
-        // Rata-rata TW = total persentase / jumlah bulan dengan data
-        $persentaseTW = $jumlahBulanDenganData > 0
-            ? round($totalPersentaseTW / $jumlahBulanDenganData, 2)
-            : 0;
+        // Rata-rata TW = total persentase 3 bulan / 3
+        $persentaseTW = round($totalPersentaseTW / 3, 2);
 
         // Status
         $bulanKeNomor = [
@@ -682,11 +674,6 @@ class DashboardController extends Controller
         $bulanSekarang = Carbon::now()->month;
         $tahunSekarang = Carbon::now()->year;
 
-        $semuaBulan = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'des'];
-
-        // Ambil bulan dari Januari sampai bulan berjalan
-        $bulanSampaiSekarang = array_slice($semuaBulan, 0, $bulanSekarang);
-
         // Total indikator AKTIF (filter berdasarkan unit untuk non-admin)
         $totalIndikatorAktifQuery = Indikator::where('is_active', true);
         if (!$isAdmin && $userUnitCode) {
@@ -712,106 +699,75 @@ class DashboardController extends Controller
         }
         $activeIndikatorIds = $activeIndikatorQuery->pluck('id')->toArray();
 
-        $totalPersentaseTahunan = 0;
-        $jumlahBulanDenganData = 0;
+        // TW berjalan
+        $twSekarang = (int) ceil($bulanSekarang / 3);
 
-        foreach ($bulanSampaiSekarang as $bulan) {
-            $numeratorField = $bulan . '_n';
-            $denominatorField = $bulan . '_d';
-            $approvedFieldBulan = $bulan . '_approved';
-
-            // Hitung total hasil untuk bulan ini - HANYA YANG SUDAH APPROVED
-            $capaianData = CapaianIndikator::where('tahun', $tahunSekarang)
-                ->whereIn('indikator_id', $activeIndikatorIds)
-                ->where($approvedFieldBulan, true)
-                ->whereNotNull($numeratorField)
-                ->whereNotNull($denominatorField)
-                ->where($denominatorField, '>', 0)
-                ->get();
-
-            $totalHasil = 0;
-            $jumlahCapaian = 0;
-
-            foreach ($capaianData as $capaian) {
-                $n = $capaian->{$numeratorField};
-                $d = $capaian->{$denominatorField};
-
-                if ($d > 0) {
-                    $hasil = ($n / $d) * 100;
-                    $totalHasil += $hasil;
-                    $jumlahCapaian++;
-                }
-            }
-
-            $persentaseBulan = $jumlahCapaian > 0
-                ? round($totalHasil / $jumlahCapaian, 2)
-                : 0;
-
-            if ($jumlahCapaian > 0) {
-                $totalPersentaseTahunan += $persentaseBulan;
-                $jumlahBulanDenganData++;
-            }
-        }
-
-        // Rata-rata tahunan = total persentase / jumlah bulan dengan data
-        $persentaseTahunan = $jumlahBulanDenganData > 0
-            ? round($totalPersentaseTahunan / $jumlahBulanDenganData, 2)
-            : 0;
-
-        // Status message
-        $twSekarang = ceil($bulanSekarang / 3);
-        $bulanPerTriwulan = [
-            1 => 3,  // TW1 berakhir di bulan 3 (Maret)
-            2 => 6,  // TW2 berakhir di bulan 6 (Juni)
-            3 => 9,  // TW3 berakhir di bulan 9 (September)
-            4 => 12  // TW4 berakhir di bulan 12 (Desember)
+        $bulanPerTriwulanFull = [
+            1 => ['jan', 'feb', 'mar'],
+            2 => ['apr', 'may', 'jun'],
+            3 => ['jul', 'aug', 'sep'],
+            4 => ['oct', 'nov', 'des'],
         ];
 
-        $bulanAkhirTW = $bulanPerTriwulan[$twSekarang];
+        $totalPersentaseTahunan = 0;
+
+        // Hitung capaian per TW (masing-masing 3 bulan / 3), lalu rata-ratakan per jumlah TW berjalan
+        for ($tw = 1; $tw <= $twSekarang; $tw++) {
+            $bulanTW = $bulanPerTriwulanFull[$tw];
+            $totalPersentaseTW = 0;
+            foreach ($bulanTW as $bulan) {
+                $nField = $bulan . '_n';
+                $dField = $bulan . '_d';
+                $caps = CapaianIndikator::where('tahun', $tahunSekarang)
+                    ->whereIn('indikator_id', $activeIndikatorIds)
+                    ->whereNotNull($nField)
+                    ->whereNotNull($dField)
+                    ->where($dField, '>', 0)
+                    ->get();
+                $sum = 0;
+                foreach ($caps as $c) {
+                    if ($c->{$dField} > 0) { $sum += ($c->{$nField} / $c->{$dField}) * 100; }
+                }
+                // Bagi total semua indikator aktif (bukan hanya yang terisi)
+                $totalPersentaseTW += $totalIndikatorAktif > 0 ? round($sum / $totalIndikatorAktif, 2) : 0;
+            }
+            $totalPersentaseTahunan += round($totalPersentaseTW / 3, 2);
+        }
+
+        // Rata-rata tahunan = total capaian TW / jumlah TW berjalan
+        $persentaseTahunan = round($totalPersentaseTahunan / $twSekarang, 2);
+
+        // Status message
+        $bulanPerTriwulanAkhir = [1 => 3, 2 => 6, 3 => 9, 4 => 12];
+        $bulanAkhirTW = $bulanPerTriwulanAkhir[$twSekarang];
 
         if ($bulanSekarang <= $bulanAkhirTW) {
             $status = "menunggu data TW " . $twSekarang;
         } else {
             $twBerikutnya = $twSekarang + 1;
-            if ($twBerikutnya <= 4) {
-                $status = "menunggu data TW " . $twBerikutnya;
-            } else {
-                $status = "data lengkap";
-            }
+            $status = $twBerikutnya <= 4 ? "menunggu data TW " . $twBerikutnya : "data lengkap";
         }
 
         // Hitung capaian TW sebelumnya (untuk ditampilkan saat hover)
         $twSebelumnyaData = null;
         if ($twSekarang > 1) {
             $twPrev = $twSekarang - 1;
-            $bulanPerTriwulanFull = [
-                1 => ['jan', 'feb', 'mar'],
-                2 => ['apr', 'may', 'jun'],
-                3 => ['jul', 'aug', 'sep'],
-                4 => ['oct', 'nov', 'des'],
-            ];
-            $namaBulanIndo = [
-                'jan' => 'Januari', 'feb' => 'Februari', 'mar' => 'Maret',
-                'apr' => 'April',   'may' => 'Mei',       'jun' => 'Juni',
-                'jul' => 'Juli',    'aug' => 'Agustus',   'sep' => 'September',
-                'oct' => 'Oktober', 'nov' => 'November',  'des' => 'Desember',
-            ];
             $bulanTW = $bulanPerTriwulanFull[$twPrev];
             $totalPct = 0;
             foreach ($bulanTW as $bl) {
                 $nField = $bl . '_n';
                 $dField = $bl . '_d';
-                $apField = $bl . '_approved';
                 $caps = CapaianIndikator::where('tahun', $tahunSekarang)
                     ->whereIn('indikator_id', $activeIndikatorIds)
-                    ->where($apField, true)
-                    ->whereNotNull($nField)->whereNotNull($dField)
-                    ->where($dField, '>', 0)->get();
-                $sum = 0; $cnt = 0;
+                    ->whereNotNull($nField)
+                    ->whereNotNull($dField)
+                    ->where($dField, '>', 0)
+                    ->get();
+                $sum = 0;
                 foreach ($caps as $c) {
-                    if ($c->{$dField} > 0) { $sum += ($c->{$nField} / $c->{$dField}) * 100; $cnt++; }
+                    if ($c->{$dField} > 0) { $sum += ($c->{$nField} / $c->{$dField}) * 100; }
                 }
-                $totalPct += $cnt > 0 ? round($sum / $cnt, 2) : 0;
+                $totalPct += $totalIndikatorAktif > 0 ? round($sum / $totalIndikatorAktif, 2) : 0;
             }
             $twSebelumnyaData = [
                 'triwulan' => $twPrev,
@@ -822,8 +778,8 @@ class DashboardController extends Controller
         return [
             'persentase' => $persentaseTahunan,
             'totalIndikator' => $totalIndikatorAktif * $totalUnits,
-            'totalValidasi' => 0, // Deprecated
-            'jumlahBulan' => $jumlahBulanDenganData,
+            'totalValidasi' => 0,
+            'jumlahBulan' => $twSekarang,
             'status' => $status,
             'twSebelumnya' => $twSebelumnyaData,
         ];

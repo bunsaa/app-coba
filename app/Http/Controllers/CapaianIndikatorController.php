@@ -22,6 +22,7 @@ class CapaianIndikatorController extends Controller
         // Check user role - support both new role field and legacy email check
         $isAdminMutu = $user->role === 'admin_mutu' || $user->email === 'admin@mutu.rsud.go.id';
         $isKepalaUnit = $user->role === 'kepala_unit';
+        $isPjData = str_starts_with($user->role ?? '', 'PJ Data - ');
 
         // Get all units for dropdown
         $units = Units::with('tim_units')->orderBy('nama_unit', 'asc')->get();
@@ -53,7 +54,11 @@ class CapaianIndikatorController extends Controller
         $canApprove = $isAdminMutu || ($isKepalaUnit && $user->kode_unit === $selectedUnitCode);
 
         // Get selected tim unit (if any)
+        // PJ Data auto-select their own tim based on their role name
         $selectedTimUnit = $request->input('tim_unit', null);
+        if (!$selectedTimUnit && $isPjData) {
+            $selectedTimUnit = str_replace('PJ Data - ', '', $user->role);
+        }
 
         // Get quarter and year from request or use current
         $currentMonth = Carbon::now()->month;
@@ -61,8 +66,8 @@ class CapaianIndikatorController extends Controller
         $currentQuarter = ceil($currentMonth / 3);
         $currentDay = Carbon::now()->day;
 
-        // Check if we can still input data (before 27th of current month)
-        $canInput = $currentDay <= 29;
+        // Hanya PJ Data dan admin yang boleh input data capaian
+        $canInput = ($isPjData || $isAdminMutu) && $currentDay <= 29;
 
         $tahun = (int) $request->input('tahun', $currentYear);
         $quarter = (int) $request->input('quarter', $currentQuarter);
@@ -162,13 +167,16 @@ class CapaianIndikatorController extends Controller
                     ];
                 }
 
-                // Get analisis/RTL per month
-                $monthlyAnalisis = [];
+                // Get analisis/RTL per month + history
+                $monthlyAnalisis       = [];
+                $monthlyAnalisisHistory = [];
+                $allHistory            = $capaian->analisis_rtl_history ?? [];
                 foreach($monthsToShow as $month) {
                     $monthlyAnalisis[$month] = [
                         'analisis' => $capaian->{$month . '_analisis'} ?? '',
                         'rtl' => $capaian->{$month . '_rtl'} ?? '',
                     ];
+                    $monthlyAnalisisHistory[$month] = $allHistory[$month] ?? [];
                 }
 
                 return [
@@ -188,6 +196,7 @@ class CapaianIndikatorController extends Controller
                     'att' => $attachments,
                     'komentar' => $monthlyKomentar,
                     'analisisRtl' => $monthlyAnalisis,
+                    'analisisRtlHistory' => $monthlyAnalisisHistory,
                     'rejectionHistory' => $capaian->rejection_history ?? [],
                 ];
             })->toArray();
@@ -391,9 +400,12 @@ if ($selectedUnitCode) {
     // Save N/D data
     public function saveCapaian(Request $request)
     {
-        // Kepala unit tidak boleh input data, hanya approve/reject
-        if (auth()->user()->role === 'kepala_unit') {
-            return response()->json(['error' => 'Kepala unit tidak dapat mengisi data capaian'], 403);
+        $userRole = auth()->user()->role ?? '';
+        $isAdminMutu = $userRole === 'admin_mutu' || auth()->user()->email === 'admin@mutu.rsud.go.id';
+        $isPjData = str_starts_with($userRole, 'PJ Data - ');
+
+        if (!$isPjData && !$isAdminMutu) {
+            return response()->json(['error' => 'Hanya PJ Data yang dapat mengisi data capaian indikator'], 403);
         }
 
         $validated = $request->validate([
@@ -432,11 +444,27 @@ if ($selectedUnitCode) {
         $field = $validated['field'] === 'N' ? 'n' : 'd';
         $fieldName = $bulan . '_' . $field;
 
+        $isNewRecord = !CapaianIndikator::where([
+            'indikator_id' => $validated['indikator_id'],
+            'kode_unit'    => $validated['kode_unit'],
+            'tahun'        => $validated['tahun'],
+        ])->exists();
+
         $capaian = CapaianIndikator::firstOrNew([
             'indikator_id' => $validated['indikator_id'],
             'kode_unit' => $validated['kode_unit'],
             'tahun' => $validated['tahun'],
         ]);
+
+        // Isi nama_indikator saat pertama kali dibuat
+        if ($isNewRecord && !$capaian->nama_indikator) {
+            $indikatorModel = \App\Models\Indikator::find($validated['indikator_id']);
+            $capaian->nama_indikator = $indikatorModel?->indikator;
+            $capaian->created_by = auth()->user()->name;
+        }
+
+        // Selalu update updated_by setiap ada perubahan data
+        $capaian->updated_by = auth()->user()->name;
 
         if ($capaian->{$bulan . '_validated'}) {
             return response()->json(['error' => 'Bulan ini sudah divalidasi, tidak dapat diubah'], 422);
@@ -496,6 +524,11 @@ if ($selectedUnitCode) {
                 if ($relCapaian->{$bulan . '_rejected'}) {
                     $relCapaian->{$bulan . '_rejected'} = false;
                 }
+                if (!$relCapaian->exists) {
+                    $relCapaian->nama_indikator = $rel->indikator;
+                    $relCapaian->created_by = auth()->user()->name;
+                }
+                $relCapaian->updated_by = auth()->user()->name;
                 $relCapaian->save();
                 $autoFilledIds[] = $rel->id;
             }
@@ -504,9 +537,18 @@ if ($selectedUnitCode) {
         return response()->json(['success' => true, 'capaian' => $capaian, 'autoFilledIds' => $autoFilledIds]);
     }
 
-    // Save Analisis & RTL per month (staf, kepala_unit, dan admin_mutu boleh edit)
+    // Save Analisis & RTL per month (PJ Data, kepala_unit, dan admin_mutu)
     public function saveAnalisis(Request $request)
     {
+        $user = auth()->user();
+        $userRole = $user->role ?? '';
+        $isAdminMutu = $userRole === 'admin_mutu' || $user->email === 'admin@mutu.rsud.go.id';
+        $isPjData = str_starts_with($userRole, 'PJ Data - ') || $userRole === 'PJ Data';
+        $isKepalaUnit = $userRole === 'kepala_unit';
+
+        if (!$isPjData && !$isAdminMutu && !$isKepalaUnit) {
+            return response()->json(['error' => 'Tidak memiliki kewenangan untuk mengisi analisis dan RTL'], 403);
+        }
 
         $validated = $request->validate([
             'indikator_id' => 'required|exists:indikators,id',
@@ -559,18 +601,40 @@ if ($selectedUnitCode) {
             }
         }
 
+        // Simpan versi lama ke history sebelum overwrite
+        $oldAnalisis = $capaian->{$bulan . '_analisis'};
+        $oldRtl      = $capaian->{$bulan . '_rtl'};
+        if (!empty($oldAnalisis) || !empty($oldRtl)) {
+            $history           = $capaian->analisis_rtl_history ?? [];
+            $history[$bulan]   = $history[$bulan] ?? [];
+            array_unshift($history[$bulan], [
+                'analisis'        => $oldAnalisis ?? '',
+                'rtl'             => $oldRtl ?? '',
+                'changed_at'      => now()->format('Y-m-d H:i:s'),
+                'changed_by'      => $user->name,
+                'changed_by_role' => $userRole,
+            ]);
+            $capaian->analisis_rtl_history = $history;
+        }
+
         $capaian->{$bulan . '_analisis'} = $validated['analisis'];
         $capaian->{$bulan . '_rtl'} = $validated['rtl'];
+        $capaian->updated_by = $user->name;
         $capaian->save();
 
-        return response()->json(['success' => true]);
+        $analisisHistory = $capaian->analisis_rtl_history[$bulan] ?? [];
+        return response()->json(['success' => true, 'analisisHistory' => $analisisHistory]);
     }
 
     // Upload lampiran
     public function uploadLampiran(Request $request)
     {
-        if (auth()->user()->role === 'kepala_unit') {
-            return response()->json(['error' => 'Kepala unit tidak dapat upload lampiran'], 403);
+        $userRole = auth()->user()->role ?? '';
+        $isAdminMutu = $userRole === 'admin_mutu' || auth()->user()->email === 'admin@mutu.rsud.go.id';
+        $isPjData = str_starts_with($userRole, 'PJ Data - ');
+
+        if (!$isPjData && !$isAdminMutu) {
+            return response()->json(['error' => 'Hanya PJ Data yang dapat upload lampiran'], 403);
         }
 
         $validated = $request->validate([
@@ -1030,13 +1094,16 @@ if ($selectedUnitCode) {
             ];
         }
 
-        // Build analisisRtl per month
-        $analisisRtl = [];
+        // Build analisisRtl + history per month
+        $analisisRtl        = [];
+        $analisisRtlHistory = [];
+        $allHistory         = $capaian ? ($capaian->analisis_rtl_history ?? []) : [];
         foreach ($bulanList as $bulan) {
             $analisisRtl[$bulan] = [
                 'analisis' => $capaian ? ($capaian->{$bulan . '_analisis'} ?? '') : '',
                 'rtl' => $capaian ? ($capaian->{$bulan . '_rtl'} ?? '') : '',
             ];
+            $analisisRtlHistory[$bulan] = $allHistory[$bulan] ?? [];
         }
 
         // Compute recommendation for the requested month
@@ -1070,6 +1137,7 @@ if ($selectedUnitCode) {
             'attachments' => $attachments,
             'komentars' => $komentars,
             'analisisRtl' => $analisisRtl,
+            'analisisRtlHistory' => $analisisRtlHistory,
             'rejectionHistory' => $capaian ? ($capaian->rejection_history ?? []) : [],
             'recommendation' => $recommendation,
         ]);

@@ -127,35 +127,120 @@ class RekomendasiService
     ): array {
         // Guard: missing data
         if ($n === null || $d === null || $d == 0) {
-            return $this->noDataResult();
+            return $this->noDataResult($indikatorText);
         }
 
         $achievement = $this->computeAchievement($n, $d, $satuan);
+
+        // Unit suffix untuk display
+        $unit = match ($satuan) {
+            'permil'    => '‰',
+            'rata-rata' => '',
+            default     => '%',
+        };
+        $achievementStr = number_format($achievement, 1, ',', '.') . $unit;
+        $nStr           = number_format((int) $n, 0, ',', '.');
+        $dStr           = number_format((int) $d, 0, ',', '.');
+
+        // Deteksi indikator sentinel (standar = 0 / = 0)
+        if ($this->isSentinel($standar)) {
+            return $this->sentinelResult($indikatorText, $achievement, $achievementStr, $nStr, $dStr);
+        }
+
         ['op' => $op, 'value' => $targetValue] = $this->parseStandar($standar);
 
         if ($op === null || $targetValue === null) {
-            return $this->genericResult($achievement, $satuan, $standar);
+            return $this->genericResult($indikatorText, $achievement, $achievementStr, $nStr, $dStr, $standar);
         }
 
         $achieved = $this->evaluate($achievement, $op, $targetValue);
         $gap      = $achieved ? null : $this->buildGap($achievement, $op, $targetValue, $satuan, $standar);
+        $gapStr   = $gap ? " ({$gap})" : '';
         $rule     = $this->matchRule($indikatorText);
+        $source   = $rule !== null ? $rule['source'] : self::SPM_SOURCE;
 
-        if ($rule !== null) {
-            $source         = $rule['source'];
-            $recommendation = $achieved ? $rule['action_green'] : $rule['action_red'];
+        // Kalimat pembuka resume hasil pengisian
+        if ($achieved) {
+            $intro = "Indikator \"{$indikatorText}\" mencapai {$achievementStr} (N={$nStr}, D={$dStr}), "
+                   . "memenuhi standar {$standar} sesuai {$source}. ";
         } else {
-            $source         = self::SPM_SOURCE;
-            $recommendation = $achieved ? self::SPM_ACTION_GREEN : self::SPM_ACTION_RED;
+            $intro = "Indikator \"{$indikatorText}\" mencapai {$achievementStr} (N={$nStr}, D={$dStr}){$gapStr}, "
+                   . "belum memenuhi standar {$standar} sesuai {$source}. ";
         }
+
+        $actionText   = $rule !== null
+            ? ($achieved ? $rule['action_green'] : $rule['action_red'])
+            : ($achieved ? self::SPM_ACTION_GREEN : self::SPM_ACTION_RED);
 
         return [
             'status'         => $achieved ? 'Tercapai' : 'Tidak Tercapai',
             'color'          => $achieved ? 'green' : 'red',
             'achievement'    => round($achievement, 2),
             'gap'            => $gap,
-            'recommendation' => $recommendation,
+            'recommendation' => $intro . $actionText,
             'source'         => $source,
+        ];
+    }
+
+    /**
+     * Cek apakah indikator merupakan sentinel event (standar = 0).
+     */
+    private function isSentinel(string $standar): bool
+    {
+        $s = trim(str_replace(['≥', '≤'], ['>=', '<='], $standar));
+        return $s === '0' || $s === '= 0' || $s === '=0';
+    }
+
+    /**
+     * Rekomendasi khusus untuk indikator sentinel event.
+     */
+    private function sentinelResult(
+        string $indikatorText,
+        float  $achievement,
+        string $achievementStr,
+        string $nStr,
+        string $dStr
+    ): array {
+        if ($achievement == 0) {
+            $status = 'Tercapai';
+            $color  = 'green';
+            $rec    = "Indikator \"{$indikatorText}\" mencatat 0 kejadian (N={$nStr}, D={$dStr}), "
+                    . "telah memenuhi standar yang ditetapkan. "
+                    . "Pertahankan kondisi ini dengan menjaga kepatuhan terhadap prosedur dan protokol yang berlaku. "
+                    . "Lakukan evaluasi rutin dan edukasi berkala kepada staf untuk mencegah terjadinya kejadian serupa.";
+        } elseif ($achievement <= 10) {
+            $status = 'Risiko Rendah';
+            $color  = 'yellow';
+            $rec    = "Indikator \"{$indikatorText}\" mencapai {$achievementStr} (N={$nStr}, D={$dStr}), "
+                    . "tergolong kategori risiko rendah (0,01–10%). "
+                    . "Meskipun masih dalam kategori rendah, setiap kejadian tetap harus diinvestigasi. "
+                    . "Lakukan analisis akar masalah (root cause analysis), dokumentasikan temuan, dan susun langkah pencegahan agar tidak terjadi pengulangan. "
+                    . "Laporkan hasil investigasi kepada pimpinan unit secara berkala sesuai Permenkes No. 30 Tahun 2022.";
+        } elseif ($achievement <= 50) {
+            $status = 'Risiko Sedang';
+            $color  = 'orange';
+            $rec    = "Indikator \"{$indikatorText}\" mencapai {$achievementStr} (N={$nStr}, D={$dStr}), "
+                    . "tergolong kategori risiko sedang (10–50%). "
+                    . "Segera lakukan evaluasi mendalam terhadap prosedur pelayanan dan identifikasi faktor penyebab. "
+                    . "Susun rencana tindak lanjut terstruktur, tingkatkan supervisi, dan lakukan pelatihan staf yang relevan. "
+                    . "Pantau perkembangan secara intensif dan eskalasikan kepada pimpinan sesuai ketentuan Pergub DKI Jakarta No. 20 Tahun 2016.";
+        } else {
+            $status = 'Risiko Tinggi';
+            $color  = 'red';
+            $rec    = "Indikator \"{$indikatorText}\" mencapai {$achievementStr} (N={$nStr}, D={$dStr}), "
+                    . "tergolong kategori risiko tinggi (>50%). "
+                    . "Kondisi ini memerlukan penanganan segera dan komprehensif. "
+                    . "Lakukan investigasi menyeluruh, perbaikan sistem, dan terapkan langkah korektif secepat mungkin. "
+                    . "Eskalasikan kepada pimpinan unit sebagai prioritas utama dan laporkan rencana perbaikan secara tertulis sesuai Permenkes No. 30 Tahun 2022 dan Pergub DKI Jakarta No. 20 Tahun 2016.";
+        }
+
+        return [
+            'status'         => $status,
+            'color'          => $color,
+            'achievement'    => round($achievement, 2),
+            'gap'            => null,
+            'recommendation' => $rec,
+            'source'         => self::SPM_SOURCE,
         ];
     }
 
@@ -234,36 +319,35 @@ class RekomendasiService
         return "Kurang {$rounded}{$unit} dari target {$standar}";
     }
 
-    private function noDataResult(): array
+    private function noDataResult(string $indikatorText = ''): array
     {
+        $label = $indikatorText ? "Indikator \"{$indikatorText}\"" : 'Indikator ini';
         return [
             'status'         => 'Data Belum Lengkap',
             'color'          => 'gray',
             'achievement'    => null,
             'gap'            => null,
-            'recommendation' => 'Lengkapi data numerator (N) dan denominator (D) untuk mendapatkan rekomendasi perbaikan.',
+            'recommendation' => "{$label} belum memiliki data numerator (N) dan/atau denominator (D). Lengkapi data terlebih dahulu untuk mendapatkan rekomendasi perbaikan.",
             'source'         => null,
         ];
     }
 
-    private function genericResult(float $achievement, string $satuan, string $standar): array
-    {
-        $unit = match ($satuan) {
-            'permil'    => '‰',
-            'rata-rata' => '',
-            default     => '%',
-        };
+    private function genericResult(
+        string $indikatorText,
+        float  $achievement,
+        string $achievementStr,
+        string $nStr,
+        string $dStr,
+        string $standar
+    ): array {
         return [
             'status'         => 'Data Tersedia',
             'color'          => 'gray',
             'achievement'    => round($achievement, 2),
             'gap'            => null,
-            'recommendation' => sprintf(
-                'Capaian saat ini: %s%s. Standar: %s. Evaluasi capaian sesuai kebijakan SPM dan ketentuan unit.',
-                number_format($achievement, 1, ',', '.'),
-                $unit,
-                $standar
-            ),
+            'recommendation' => "Indikator \"{$indikatorText}\" mencapai {$achievementStr} (N={$nStr}, D={$dStr}). "
+                              . "Standar yang ditetapkan: {$standar} sesuai " . self::SPM_SOURCE . ". "
+                              . "Evaluasi capaian sesuai kebijakan SPM dan ketentuan unit.",
             'source'         => self::SPM_SOURCE,
         ];
     }

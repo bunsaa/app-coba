@@ -37,7 +37,7 @@ const page = usePage();
 const currentPath = computed(() => page?.url || '');
 
 const user = computed(() => page.props.auth?.user);
-const isAdmin = computed(() => user.value?.role === 'admin_mutu' || user.value?.email === 'admin@mutu.rsud.go.id');
+const isAdmin = computed(() => user.value?.role === 'admin_mutu');
 const isKepalaUnit = computed(() => user.value?.role === 'kepala_unit');
 const isStaf = computed(() => user.value?.role === 'staf');
 

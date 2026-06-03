@@ -14,12 +14,12 @@ class PegawaiController extends Controller
     public function index()
     {
         $user = Auth::user();
-        if ($user->role !== 'admin_mutu' && $user->email !== 'admin@mutu.rsud.go.id') {
+        if ($user->role !== 'admin_mutu') {
             abort(403);
         }
 
         $users = User::with('unit')->orderBy('name', 'asc')->get();
-        $units = Units::orderBy('kode_unit', 'asc')->get();
+        $units = Units::with('tim_units')->orderBy('kode_unit', 'asc')->get();
 
         return Inertia::render('ManajemenPegawai', [
             'users' => $users,
@@ -30,36 +30,38 @@ class PegawaiController extends Controller
     public function store(Request $request)
     {
         $user = Auth::user();
-        if ($user->role !== 'admin_mutu' && $user->email !== 'admin@mutu.rsud.go.id') {
+        if ($user->role !== 'admin_mutu') {
             abort(403);
         }
 
         $request->validate([
-            'name' => 'required|string|max:255',
-            'nip' => 'nullable|string|max:30|unique:users,nip',
-            'email' => 'required|email|unique:users,email',
-            'password' => 'required|string|min:6',
-            'role' => 'required|in:admin_mutu,kepala_unit,staf',
+            'name'           => 'required|string|max:255',
+            'nip'            => 'nullable|string|max:30|unique:users,nip',
+            'password'       => 'required|string|min:6',
+            'base_role'      => 'required|in:admin_mutu,kepala_unit,staf',
             'status_pegawai' => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
-            'kode_unit' => 'nullable|exists:units,kode_unit',
+            'status_kerja'   => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
+            'kode_unit'      => 'nullable|exists:units,kode_unit',
+            'is_pj_data'     => 'nullable|boolean',
+            'pj_data_tim'    => 'nullable|string|max:200',
         ], [
-            'name.required' => 'Nama wajib diisi',
-            'nip.unique' => 'NIP sudah digunakan',
-            'email.required' => 'Email wajib diisi',
-            'email.unique' => 'Email sudah digunakan',
+            'name.required'     => 'Nama wajib diisi',
+            'nip.unique'        => 'NIP sudah digunakan',
             'password.required' => 'Password wajib diisi',
-            'password.min' => 'Password minimal 6 karakter',
-            'role.required' => 'Jabatan wajib dipilih',
+            'password.min'      => 'Password minimal 6 karakter',
+            'base_role.required'=> 'Jabatan wajib dipilih',
         ]);
 
+        $role = $this->resolveRole($request);
+
         User::create([
-            'name' => $request->name,
-            'nip' => $request->nip ?: null,
-            'email' => $request->email,
-            'password' => Hash::make($request->password),
-            'role' => $request->role,
+            'name'           => $request->name,
+            'nip'            => $request->nip ?: null,
+            'password'       => Hash::make($request->password),
+            'role'           => $role,
             'status_pegawai' => $request->status_pegawai,
-            'kode_unit' => $request->kode_unit,
+            'status_kerja'   => $request->status_kerja,
+            'kode_unit'      => $request->kode_unit,
         ]);
 
         return redirect()->back()->with('success', 'Pegawai berhasil ditambahkan!');
@@ -68,36 +70,38 @@ class PegawaiController extends Controller
     public function update(Request $request, $id)
     {
         $user = Auth::user();
-        if ($user->role !== 'admin_mutu' && $user->email !== 'admin@mutu.rsud.go.id') {
+        if ($user->role !== 'admin_mutu') {
             abort(403);
         }
 
         $pegawai = User::findOrFail($id);
 
         $request->validate([
-            'name' => 'required|string|max:255',
-            'nip' => 'nullable|string|max:30|unique:users,nip,' . $id,
-            'email' => 'required|email|unique:users,email,' . $id,
-            'password' => 'nullable|string|min:6',
-            'role' => 'required|in:admin_mutu,kepala_unit,staf',
+            'name'           => 'required|string|max:255',
+            'nip'            => 'nullable|string|max:30|unique:users,nip,' . $id,
+            'password'       => 'nullable|string|min:6',
+            'base_role'      => 'required|in:admin_mutu,kepala_unit,staf',
             'status_pegawai' => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
-            'kode_unit' => 'nullable|exists:units,kode_unit',
+            'status_kerja'   => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
+            'kode_unit'      => 'nullable|exists:units,kode_unit',
+            'is_pj_data'     => 'nullable|boolean',
+            'pj_data_tim'    => 'nullable|string|max:200',
         ], [
-            'name.required' => 'Nama wajib diisi',
-            'nip.unique' => 'NIP sudah digunakan',
-            'email.required' => 'Email wajib diisi',
-            'email.unique' => 'Email sudah digunakan',
-            'password.min' => 'Password minimal 6 karakter',
-            'role.required' => 'Jabatan wajib dipilih',
+            'name.required'      => 'Nama wajib diisi',
+            'nip.unique'         => 'NIP sudah digunakan',
+            'password.min'       => 'Password minimal 6 karakter',
+            'base_role.required' => 'Jabatan wajib dipilih',
         ]);
 
+        $role = $this->resolveRole($request);
+
         $updateData = [
-            'name' => $request->name,
-            'nip' => $request->nip ?: null,
-            'email' => $request->email,
-            'role' => $request->role,
+            'name'           => $request->name,
+            'nip'            => $request->nip ?: null,
+            'role'           => $role,
             'status_pegawai' => $request->status_pegawai,
-            'kode_unit' => $request->kode_unit,
+            'status_kerja'   => $request->status_kerja,
+            'kode_unit'      => $request->kode_unit,
         ];
 
         if ($request->filled('password')) {
@@ -112,7 +116,7 @@ class PegawaiController extends Controller
     public function destroy($id)
     {
         $user = Auth::user();
-        if ($user->role !== 'admin_mutu' && $user->email !== 'admin@mutu.rsud.go.id') {
+        if ($user->role !== 'admin_mutu') {
             abort(403);
         }
 
@@ -124,5 +128,20 @@ class PegawaiController extends Controller
         $pegawai->delete();
 
         return redirect()->back()->with('success', 'Pegawai berhasil dihapus!');
+    }
+
+    /**
+     * Resolusi role akhir berdasarkan base_role + is_pj_data + pj_data_tim.
+     */
+    private function resolveRole(Request $request): string
+    {
+        $baseRole = $request->base_role;
+
+        if ($request->boolean('is_pj_data') && $baseRole === 'staf') {
+            $tim = trim($request->pj_data_tim ?? '');
+            return $tim !== '' ? "PJ Data - {$tim}" : 'PJ Data';
+        }
+
+        return $baseRole;
     }
 }

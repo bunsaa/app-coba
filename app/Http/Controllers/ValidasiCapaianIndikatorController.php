@@ -10,6 +10,7 @@ use App\Models\Indikator;
 use App\Models\CapaianIndikator;
 use App\Models\CapaianLampiran;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
@@ -216,6 +217,7 @@ class ValidasiCapaianIndikatorController extends Controller
     'analisis' => $capaian->{$bulan . '_analisis'} ?? '',
     'rtl' => $capaian->{$bulan . '_rtl'} ?? '',
     'rekomendasi' => $capaian->{$bulan . '_rekomendasi'} ?? '',
+    'analisis_rtl_history' => $capaian->analisis_rtl_history[$bulan] ?? [],
 ];
         });
 
@@ -585,11 +587,34 @@ class ValidasiCapaianIndikatorController extends Controller
             'tahun' => $validated['tahun'],
         ]);
 
+        // Simpan versi lama ke history sebelum overwrite
+        $oldAnalisis = $capaian->{$bulanKey . '_analisis'};
+        $oldRtl = $capaian->{$bulanKey . '_rtl'};
+        if (!empty($oldAnalisis) || !empty($oldRtl)) {
+            $user = Auth::user();
+            $history = $capaian->analisis_rtl_history ?? [];
+            if (!isset($history[$bulanKey])) {
+                $history[$bulanKey] = [];
+            }
+            array_unshift($history[$bulanKey], [
+                'analisis'        => $oldAnalisis ?? '',
+                'rtl'             => $oldRtl ?? '',
+                'changed_at'      => now()->format('Y-m-d H:i:s'),
+                'changed_by'      => $user->name,
+                'changed_by_role' => $user->role,
+            ]);
+            $capaian->analisis_rtl_history = $history;
+        }
+
         $capaian->{$bulanKey . '_analisis'} = $validated['analisis'];
         $capaian->{$bulanKey . '_rtl'} = $validated['rtl'];
         $capaian->save();
 
-        return response()->json(['success' => true, 'message' => 'Analisis/RTL berhasil disimpan']);
+        return response()->json([
+            'success' => true,
+            'message' => 'Analisis/RTL berhasil disimpan',
+            'analisisHistory' => $capaian->analisis_rtl_history[$bulanKey] ?? [],
+        ]);
     }
 
     public function generateRekomendasi(Request $request)

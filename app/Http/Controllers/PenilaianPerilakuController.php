@@ -233,9 +233,7 @@ class PenilaianPerilakuController extends Controller
             abort(403);
         }
 
-        // Auto-sync semua kepala_unit sesuai periode berjalan
-        $shouldBeAktif = self::isPenilaianPeriod();
-        User::where('role', 'kepala_unit')->update(['penilaian_aktif' => $shouldBeAktif]);
+        $isPeriod = self::isPenilaianPeriod();
 
         $kepalaList = User::with('unit')
             ->where('role', 'kepala_unit')
@@ -252,7 +250,7 @@ class PenilaianPerilakuController extends Controller
 
         return Inertia::render('PengaturanPenilaian', [
             'kepalaList' => $kepalaList,
-            'isPeriod'   => $shouldBeAktif,
+            'isPeriod'   => $isPeriod,
         ]);
     }
 

@@ -5,8 +5,9 @@
 import AppLayout from '@/layouts/AppLayout.vue';
 import type { BreadcrumbItem } from '@/types';
 import { Head, usePage, router } from '@inertiajs/vue3';
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import axios from 'axios';
+import { registerAutoSave } from '@/composables/useAutoSaveRegistry';
 
 interface TimUnit {
   id: number;
@@ -87,6 +88,38 @@ const picUnitSearch = ref(''); // Search query untuk filter daftar unit/tim di P
 const formAddInd = ref<{ jenis_indikator: string; indikator: string; standar: string; satuan: string; satuan_waktu: string; pic: string; numerator: string; denominator: string; berlaku_tw: number[] }>({ jenis_indikator: '', indikator: '', standar: '', satuan: 'persen', satuan_waktu: '', pic: '', numerator: '', denominator: '', berlaku_tw: [1,2,3,4] });
 const formAddTwOption = ref<string>('all'); // 'all' | '1' | '2' | '3' | '4'
 const isSubmitting = ref(false); // Prevent double click saat request sedang diproses
+
+// Draft localStorage untuk form tambah indikator
+const DRAFT_KEY = 'indikator_tambah_draft'
+const hasDraft = ref(false)
+
+onMounted(() => {
+  try {
+    if (localStorage.getItem(DRAFT_KEY)) hasDraft.value = true
+  } catch {}
+})
+
+function restoreDraft() {
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY)
+    if (!raw) return
+    const draft = JSON.parse(raw)
+    if (draft.form) Object.assign(formAddInd.value, draft.form)
+    if (draft.twOption) formAddTwOption.value = draft.twOption
+    if (Array.isArray(draft.picUnits)) selectedPicUnits.value = draft.picUnits
+    hasDraft.value = false
+    localStorage.removeItem(DRAFT_KEY)
+    showAddIndicator.value = true
+  } catch {
+    hasDraft.value = false
+    localStorage.removeItem(DRAFT_KEY)
+  }
+}
+
+function discardDraft() {
+  hasDraft.value = false
+  localStorage.removeItem(DRAFT_KEY)
+}
 
 // Filter units berdasarkan search query untuk PIC checkbox list
 const filteredPicUnits = computed(() => {
@@ -361,6 +394,8 @@ function addIndicatorSave() {
     onSuccess: (page) => {
       console.log('Success response:', page);
       alert('Indikator berhasil ditambahkan!');
+      localStorage.removeItem(DRAFT_KEY)
+      hasDraft.value = false
       showAddIndicator.value = false;
       // Reset form
       formAddInd.value = { jenis_indikator: '', indikator: '', standar: '', satuan: 'persen', satuan_waktu: '', pic: '', numerator: '', denominator: '', berlaku_tw: [1,2,3,4] };
@@ -801,6 +836,24 @@ function getRelevantPicForView(item: any): string {
   return '-';
 }
 
+// ===== AUTO-SAVE SEBELUM AUTO-LOGOUT =====
+const _unregisterAutoSave = registerAutoSave(async () => {
+  if (showAddIndicator.value) {
+    try {
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({
+        form: formAddInd.value,
+        twOption: formAddTwOption.value,
+        picUnits: selectedPicUnits.value,
+      }))
+      hasDraft.value = false // akan di-set true pada re-mount berikutnya
+    } catch {
+      // ignore localStorage errors
+    }
+  }
+})
+
+onUnmounted(_unregisterAutoSave)
+
 </script>
 
 <template>
@@ -808,6 +861,29 @@ function getRelevantPicForView(item: any): string {
   <AppLayout :breadcrumbs="breadcrumbs">
     <div class="flex h-full flex-1 flex-col gap-3 p-4 xl:p-6">
       <h3 class="shrink-0 text-xl font-bold text-center text-gray-800 dark:text-gray-100">INDIKATOR MUTU RSUD TARAKAN</h3>
+
+      <!-- Banner draft tersimpan dari sesi sebelumnya -->
+      <div
+        v-if="hasDraft"
+        class="flex items-center justify-between gap-3 rounded-lg border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm dark:border-yellow-700 dark:bg-yellow-900/30"
+      >
+        <div class="flex items-center gap-2 text-yellow-800 dark:text-yellow-300">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          Ada draft tambah indikator yang tersimpan dari sesi sebelumnya.
+        </div>
+        <div class="flex gap-2">
+          <button
+            @click="restoreDraft"
+            class="rounded-md bg-yellow-600 px-3 py-1 text-xs font-medium text-white hover:bg-yellow-700"
+          >Pulihkan</button>
+          <button
+            @click="discardDraft"
+            class="rounded-md border border-yellow-400 px-3 py-1 text-xs font-medium text-yellow-700 hover:bg-yellow-100 dark:text-yellow-300 dark:hover:bg-yellow-900/50"
+          >Abaikan</button>
+        </div>
+      </div>
 
       <!-- Container Card -->
       <div class="flex flex-1 min-h-0 flex-col rounded-xl border border-l-4 border-sidebar-border/70 bg-white p-5 shadow-md dark:border-sidebar-border xl:p-6">

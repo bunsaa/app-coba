@@ -21,10 +21,10 @@ class User extends Authenticatable
     protected $fillable = [
         'name',
         'nip',
-        'email',
         'password',
         'role',
         'status_pegawai',
+        'status_kerja',
         'kode_unit',
         'penilaian_aktif',
     ];
@@ -91,7 +91,6 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
-            'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
             'penilaian_aktif' => 'boolean',
