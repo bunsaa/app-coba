@@ -981,11 +981,11 @@ class DashboardController extends Controller
                     $displayName = $item->indikator->tim_unit ?? ($item->indikator->unit->nama_unit ?? 'Unknown Unit');
 
                     return [
-                        'type' => 'validasi',
+                        'type' => 'verifikasi',
                         'icon' => '✅',
                         'color' => 'bg-purple-50',
                         'text_color' => 'text-purple-700',
-                        'message' => 'Admin melakukan validasi capaian indikator ' . $displayName . ' bulan ' . $namaBulan[$month],
+                        'message' => 'Admin melakukan verifikasi capaian indikator ' . $displayName . ' bulan ' . $namaBulan[$month],
                         'timestamp' => $item->updated_at,
                         'time_display' => $item->updated_at->locale('id')->diffForHumans(),
                     ];

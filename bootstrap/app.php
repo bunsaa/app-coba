@@ -17,6 +17,24 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->encryptCookies(except: ['appearance', 'sidebar_state']);
 
+        // Exclude routes from CSRF - login & internal AJAX routes (protected by auth/captcha)
+        $middleware->validateCsrfTokens(except: [
+            '/login',
+            '/logout',
+            '/indikator/*',
+            '/verifikasi-capaian-indikator/*',
+            '/capaian-indikator/*',
+            '/rekomendasi-ai',
+            '/set-mode',
+            '/ganti-mode',
+            '/manajemen-pegawai',
+            '/manajemen-pegawai/*',
+            '/penilaian-perilaku-pegawai',
+            '/penilaian-perilaku-pegawai/*',
+            '/pengaturan-penilaian/*',
+            '/penilaian-pj-data/*',
+        ]);
+
         $middleware->web(append: [
             HandleAppearance::class,
             HandleInertiaRequests::class,

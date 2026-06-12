@@ -6,6 +6,7 @@ import { ref, computed, watch, onUnmounted } from 'vue';
 import axios from 'axios';
 import { registerAutoSave } from '@/composables/useAutoSaveRegistry';
 import AnalisisHistoryPopup, { type AnalisisHistoryEntry } from '@/components/AnalisisHistoryPopup.vue';
+import RekomendasiAI from '@/components/RekomendasiAI.vue';
 import {
   Eye,
   CheckCircle,
@@ -21,7 +22,7 @@ import {
   Clock
 } from 'lucide-vue-next';
 
-interface UnitValidasi {
+interface UnitVerifikasi {
   unit_id: number;
   unit_kode: string;
   unit_nama: string;
@@ -30,6 +31,17 @@ interface UnitValidasi {
   validated_count: number;
   has_tim_unit: boolean;
   tim_units: string[];
+  penilaian_pj: {
+    id: number;
+    nilai: string | null;
+    catatan: string | null;
+    aspek: Array<{ item: string; nilai: 'ya' | 'tidak' | null }> | null;
+    temuan_kesesuaian: string | null;
+    temuan_kelengkapan: string | null;
+    temuan_ketepatan: string | null;
+    temuan_validitas: string | null;
+    rekomendasi: Array<{ rencana: string; penanggung_jawab: string; target_waktu: string; status: string }> | null;
+  } | null;
 }
 
 interface KomentarHistory {
@@ -71,36 +83,164 @@ interface MonthOption {
 }
 
 interface Props {
-  dataValidasi: UnitValidasi[];
+  dataVerifikasi: UnitVerifikasi[];
   bulanDipilih: number;
   tahunDipilih: number;
   namaBulanDipilih: string;
   bulanSekarang: number;
   tahunSekarang: number;
   isBulanBerjalan: boolean;
-  validasiTerbuka: boolean;
+  verifikasiTerbuka: boolean;
   tanggalBatas: string;
   monthOptions: MonthOption[];
+  isAdmin: boolean;
 }
 
 const props = defineProps<Props>();
 
 const breadcrumbs: BreadcrumbItem[] = [
-  { title: 'Validasi Capaian Indikator', href: '/validasi-capaian-indikator' },
+  { title: 'Verifikasi Capaian Indikator', href: '/verifikasi-capaian-indikator' },
 ];
 
 // State
 const showDetailModal = ref(false);
 const showKomentarModal = ref(false);
-const selectedUnit = ref<UnitValidasi | null>(null);
+const selectedUnit = ref<UnitVerifikasi | null>(null);
 const selectedTimUnitFilter = ref<string>(''); // Filter tim unit di modal
-const filterValidasiStatus = ref<'' | 'validated' | 'not_validated'>(''); // Filter status validasi
+const filterVerifikasiStatus = ref<'' | 'validated' | 'not_validated'>(''); // Filter status verifikasi
 const detailCapaian = ref<DetailCapaian[]>([]);
 const allDetailCapaian = ref<DetailCapaian[]>([]); // Store all data
 const loading = ref(false);
 const selectedIndikator = ref<DetailCapaian | null>(null);
 const komentarText = ref('');
 const selectedMonth = ref(props.bulanDipilih);
+
+// === PENILAIAN PJ DATA ===
+const nilaiColorMap: Record<string, string> = {
+  'Baik':   'bg-blue-100 text-blue-700 border-blue-300',
+  'Cukup':  'bg-yellow-100 text-yellow-700 border-yellow-300',
+  'Kurang': 'bg-red-100 text-red-700 border-red-300',
+};
+
+// 12 aspek tetap
+const ASPEK_ITEMS = [
+  'Petugas memahami definisi operasional indikator',
+  'Terdapat dokumen definisi operasional di unit',
+  'Data dikumpulkan sesuai metode yang ditetapkan',
+  'Sumber data jelas (rekam medis/register/dll)',
+  'Numerator sesuai dengan kriteria indikator',
+  'Denominator sesuai dengan kriteria indikator',
+  'Data lengkap (tidak ada yang kosong)',
+  'Data akurat (sesuai dengan sumber data)',
+  'Pengumpulan data dilakukan tepat waktu',
+  'Data sudah direkap dan dihitung dengan benar',
+  'Terdapat bukti verifikasi oleh Kepala Unit',
+  'Terdapat analisis sederhana (trend/capaian)',
+];
+
+type AspekItem = { item: string; nilai: 'ya' | 'tidak' | null };
+type RekomendasiRow = { rencana: string; penanggung_jawab: string; target_waktu: string; status: string };
+
+const showPenilaianModal = ref(false);
+const penilaianUnit = ref<UnitVerifikasi | null>(null);
+const penilaianTab = ref<'aspek' | 'temuan' | 'rekomendasi'>('aspek');
+const penilaianLoading = ref(false);
+const penilaianCatatan = ref('');
+
+// Tab 1: Aspek penilaian
+const penilaianAspek = ref<AspekItem[]>([]);
+
+// Tab 2: Temuan dan analisa
+const temuanKesesuaian = ref<string | null>(null);
+const temuanKelengkapan = ref<string | null>(null);
+const temuanKetepatan  = ref<string | null>(null);
+const temuanValiditas  = ref<string | null>(null);
+
+// Tab 3: Rekomendasi perbaikan
+const rekomendasiRows = ref<RekomendasiRow[]>([]);
+
+// Auto-calculate nilai dari aspek
+const nilaiHitung = computed<string | null>(() => {
+  const total = penilaianAspek.value.length;
+  if (total === 0) return null;
+  const ya = penilaianAspek.value.filter(a => a.nilai === 'ya').length;
+  const pct = (ya / total) * 100;
+  if (pct >= 80) return 'Baik';
+  if (pct >= 60) return 'Cukup';
+  return 'Kurang';
+});
+
+const nilaiPct = computed<number>(() => {
+  const total = penilaianAspek.value.length;
+  if (total === 0) return 0;
+  const ya = penilaianAspek.value.filter(a => a.nilai === 'ya').length;
+  return Math.round((ya / total) * 100);
+});
+
+function openPenilaianModal(unit: UnitVerifikasi) {
+  penilaianUnit.value = unit;
+  penilaianTab.value = 'aspek';
+  penilaianCatatan.value = unit.penilaian_pj?.catatan ?? '';
+
+  // Load aspek dari data tersimpan (atau init kosong)
+  const savedAspek = unit.penilaian_pj?.aspek;
+  if (savedAspek && savedAspek.length > 0) {
+    penilaianAspek.value = ASPEK_ITEMS.map((item, i) => ({
+      item,
+      nilai: (savedAspek[i]?.nilai ?? null) as 'ya' | 'tidak' | null,
+    }));
+  } else {
+    penilaianAspek.value = ASPEK_ITEMS.map(item => ({ item, nilai: null }));
+  }
+
+  temuanKesesuaian.value = unit.penilaian_pj?.temuan_kesesuaian ?? null;
+  temuanKelengkapan.value = unit.penilaian_pj?.temuan_kelengkapan ?? null;
+  temuanKetepatan.value  = unit.penilaian_pj?.temuan_ketepatan ?? null;
+  temuanValiditas.value  = unit.penilaian_pj?.temuan_validitas ?? null;
+
+  rekomendasiRows.value = unit.penilaian_pj?.rekomendasi
+    ? [...unit.penilaian_pj.rekomendasi.map(r => ({ ...r }))]
+    : [];
+
+  showPenilaianModal.value = true;
+}
+
+function addRekomendasiRow() {
+  rekomendasiRows.value.push({ rencana: '', penanggung_jawab: '', target_waktu: '', status: 'Belum' });
+}
+
+function removeRekomendasiRow(i: number) {
+  rekomendasiRows.value.splice(i, 1);
+}
+
+async function savePenilaian() {
+  if (!penilaianUnit.value) return;
+  penilaianLoading.value = true;
+  try {
+    const resp = await axios.post('/penilaian-pj-data/store', {
+      kode_unit:            penilaianUnit.value.unit_kode,
+      tahun:                props.tahunDipilih,
+      bulan:                props.bulanDipilih,
+      catatan:              penilaianCatatan.value || null,
+      aspek:                penilaianAspek.value,
+      temuan_kesesuaian:    temuanKesesuaian.value,
+      temuan_kelengkapan:   temuanKelengkapan.value,
+      temuan_ketepatan:     temuanKetepatan.value,
+      temuan_validitas:     temuanValiditas.value,
+      rekomendasi:          rekomendasiRows.value.filter(r => r.rencana.trim()),
+    });
+    // Update local data
+    const idx = props.dataVerifikasi.findIndex(u => u.unit_kode === penilaianUnit.value!.unit_kode);
+    if (idx !== -1) {
+      props.dataVerifikasi[idx].penilaian_pj = resp.data.penilaian;
+    }
+    showPenilaianModal.value = false;
+  } catch (e) {
+    alert('Gagal menyimpan penilaian');
+  } finally {
+    penilaianLoading.value = false;
+  }
+}
 
 // Auto-save: track analisis/RTL yang belum tersimpan
 const analysisDirtySet = ref(new Set<number>())
@@ -209,10 +349,10 @@ const itemsPerPage = 10;
 
 // Filtered & Paginated Data
 const filteredData = computed(() => {
-  if (!searchQuery.value) return props.dataValidasi;
+  if (!searchQuery.value) return props.dataVerifikasi;
   
   const query = searchQuery.value.toLowerCase();
-  return props.dataValidasi.filter(unit => 
+  return props.dataVerifikasi.filter(unit => 
     unit.unit_nama.toLowerCase().includes(query)
   );
 });
@@ -246,39 +386,39 @@ watch(selectedTimUnitFilter, (newVal) => {
   }
 });
 
-// Indikator yang ditampilkan setelah filter status validasi
+// Indikator yang ditampilkan setelah filter status verifikasi
 const displayedCapaian = computed(() => {
-  if (!filterValidasiStatus.value) return detailCapaian.value;
-  if (filterValidasiStatus.value === 'validated') return detailCapaian.value.filter(d => d.validated);
+  if (!filterVerifikasiStatus.value) return detailCapaian.value;
+  if (filterVerifikasiStatus.value === 'validated') return detailCapaian.value.filter(d => d.validated);
   return detailCapaian.value.filter(d => !d.validated);
 });
 
 // Computed
-const totalUnit = computed(() => props.dataValidasi.length);
+const totalUnit = computed(() => props.dataVerifikasi.length);
 const totalIndikator = computed(() => 
-  props.dataValidasi.reduce((sum, unit) => sum + unit.indikator_count, 0)
+  props.dataVerifikasi.reduce((sum, unit) => sum + unit.indikator_count, 0)
 );
 const totalValidated = computed(() => 
-  props.dataValidasi.reduce((sum, unit) => sum + unit.validated_count, 0)
+  props.dataVerifikasi.reduce((sum, unit) => sum + unit.validated_count, 0)
 );
 
 const statusMessage = computed(() => {
   if (!props.isBulanBerjalan) {
     return 'Mode Lihat History';
   }
-  return props.validasiTerbuka ? 'Validasi Terbuka' : 'Periode Validasi Ditutup';
+  return props.verifikasiTerbuka ? 'Verifikasi Terbuka' : 'Periode Verifikasi Ditutup';
 });
 
 const statusColor = computed(() => {
   if (!props.isBulanBerjalan) return 'text-blue-600';
-  return props.validasiTerbuka ? 'text-green-600' : 'text-red-600';
+  return props.verifikasiTerbuka ? 'text-green-600' : 'text-red-600';
 });
 
 // Functions
 function changeBulan() {
   const selected = props.monthOptions.find(m => m.value === selectedMonth.value);
   if (selected) {
-    router.get('/validasi-capaian-indikator', {
+    router.get('/verifikasi-capaian-indikator', {
       bulan: selectedMonth.value,
       tahun: selected.year,
     }, {
@@ -288,15 +428,15 @@ function changeBulan() {
   }
 }
 
-async function lihatCapaian(unit: UnitValidasi) {
+async function lihatCapaian(unit: UnitVerifikasi) {
   selectedUnit.value = unit;
   selectedTimUnitFilter.value = ''; // Reset filter
-  filterValidasiStatus.value = '';
+  filterVerifikasiStatus.value = '';
   loading.value = true;
   showDetailModal.value = true;
 
   try {
-    const response = await axios.post('/validasi-capaian-indikator/get-detail', {
+    const response = await axios.post('/verifikasi-capaian-indikator/get-detail', {
       kode_unit: unit.unit_kode,
       tim_unit: null, // Get all tim units
       tahun: props.tahunDipilih,
@@ -336,7 +476,7 @@ async function kirimKomentar() {
   }
 
   try {
-    await axios.post('/validasi-capaian-indikator/send-komentar', {
+    await axios.post('/verifikasi-capaian-indikator/send-komentar', {
       indikator_id: selectedIndikator.value.id,
       kode_unit: selectedUnit.value?.unit_kode,
       tahun: props.tahunDipilih,
@@ -357,10 +497,10 @@ async function kirimKomentar() {
 }
 
 async function clearKomentar(indikator: DetailCapaian) {
-  if (!confirm('Hapus komentar dan aktifkan kembali tombol validasi?')) return;
+  if (!confirm('Hapus komentar dan aktifkan kembali tombol verifikasi?')) return;
 
   try {
-    await axios.post('/validasi-capaian-indikator/clear-komentar', {
+    await axios.post('/verifikasi-capaian-indikator/clear-komentar', {
       indikator_id: indikator.id,
       kode_unit: selectedUnit.value?.unit_kode,
       tahun: props.tahunDipilih,
@@ -388,7 +528,7 @@ async function clearKomentar(indikator: DetailCapaian) {
 
 async function saveAnalisisAdmin(indikator: DetailCapaian) {
   try {
-    const resp = await axios.post('/validasi-capaian-indikator/save-analisis', {
+    const resp = await axios.post('/verifikasi-capaian-indikator/save-analisis', {
       indikator_id: indikator.id,
       kode_unit: selectedUnit.value?.unit_kode,
       tahun: props.tahunDipilih,
@@ -408,14 +548,14 @@ async function saveAnalisisAdmin(indikator: DetailCapaian) {
   }
 }
 
-async function validasiSingle(indikator: DetailCapaian) {
+async function verifikasiSingle(indikator: DetailCapaian) {
   if (!props.isBulanBerjalan) {
-    alert('Hanya bisa melakukan validasi pada bulan berjalan');
+    alert('Hanya bisa melakukan verifikasi pada bulan berjalan');
     return;
   }
 
-  if (!props.validasiTerbuka) {
-    alert('Periode validasi sudah ditutup');
+  if (!props.verifikasiTerbuka) {
+    alert('Periode verifikasi sudah ditutup');
     return;
   }
 
@@ -424,10 +564,10 @@ async function validasiSingle(indikator: DetailCapaian) {
     return;
   }
 
-  if (!confirm(`Validasi indikator: ${indikator.indikator}?`)) return;
+  if (!confirm(`Verifikasi indikator: ${indikator.indikator}?`)) return;
 
   try {
-    await axios.post('/validasi-capaian-indikator/validate-single', {
+    await axios.post('/verifikasi-capaian-indikator/validate-single', {
       indikator_id: indikator.id,
       kode_unit: selectedUnit.value?.unit_kode,
       tahun: props.tahunDipilih,
@@ -439,41 +579,44 @@ async function validasiSingle(indikator: DetailCapaian) {
     if (index !== -1) {
       detailCapaian.value[index].validated = true;
     }
-    
+
     // Update allDetailCapaian too
     const allIndex = allDetailCapaian.value.findIndex(d => d.id === indikator.id);
     if (allIndex !== -1) {
       allDetailCapaian.value[allIndex].validated = true;
     }
 
-    alert('Indikator berhasil divalidasi');
+    // Refresh validated_count di tabel utama
+    router.reload({ only: ['dataVerifikasi'] });
+
+    alert('Indikator berhasil diverifikasi');
   } catch (error) {
     console.error('Error validating:', error);
-    alert('Gagal melakukan validasi');
+    alert('Gagal melakukan verifikasi');
   }
 }
 
-async function validasiUnit() {
+async function verifikasiUnit() {
   if (!props.isBulanBerjalan) {
-    alert('Hanya bisa melakukan validasi pada bulan berjalan');
+    alert('Hanya bisa melakukan verifikasi pada bulan berjalan');
     return;
   }
 
-  if (!props.validasiTerbuka) {
-    alert('Periode validasi sudah ditutup');
+  if (!props.verifikasiTerbuka) {
+    alert('Periode verifikasi sudah ditutup');
     return;
   }
 
   if (!selectedUnit.value) return;
 
   const confirmMsg = selectedTimUnitFilter.value 
-    ? `Validasi semua indikator di ${selectedUnit.value.unit_nama} - ${selectedTimUnitFilter.value}?`
-    : `Validasi semua indikator di ${selectedUnit.value.unit_nama}?`;
+    ? `Verifikasi semua indikator di ${selectedUnit.value.unit_nama} - ${selectedTimUnitFilter.value}?`
+    : `Verifikasi semua indikator di ${selectedUnit.value.unit_nama}?`;
 
   if (!confirm(confirmMsg)) return;
 
   try {
-    const response = await axios.post('/validasi-capaian-indikator/validate-unit', {
+    const response = await axios.post('/verifikasi-capaian-indikator/validate-unit', {
       kode_unit: selectedUnit.value.unit_kode,
       tim_unit: selectedTimUnitFilter.value || null,
       tahun: props.tahunDipilih,
@@ -481,38 +624,34 @@ async function validasiUnit() {
     });
 
     // Update local data
-    detailCapaian.value = detailCapaian.value.map(d => ({
-      ...d,
-      validated: true
-    }));
-    
-    allDetailCapaian.value = allDetailCapaian.value.map(d => ({
-      ...d,
-      validated: true
-    }));
+    detailCapaian.value = detailCapaian.value.map(d => ({ ...d, validated: true }));
+    allDetailCapaian.value = allDetailCapaian.value.map(d => ({ ...d, validated: true }));
+
+    // Refresh validated_count di tabel utama
+    router.reload({ only: ['dataVerifikasi'] });
 
     alert(response.data.message);
   } catch (error) {
     console.error('Error validating unit:', error);
-    alert('Gagal melakukan validasi');
+    alert('Gagal melakukan verifikasi');
   }
 }
 
-async function validasiSemuaUnit() {
+async function verifikasiSemuaUnit() {
   if (!props.isBulanBerjalan) {
-    alert('Hanya bisa melakukan validasi pada bulan berjalan');
+    alert('Hanya bisa melakukan verifikasi pada bulan berjalan');
     return;
   }
 
-  if (!props.validasiTerbuka) {
-    alert('Periode validasi sudah ditutup');
+  if (!props.verifikasiTerbuka) {
+    alert('Periode verifikasi sudah ditutup');
     return;
   }
 
-  if (!confirm('Validasi SEMUA indikator yang sudah di-approve di SEMUA unit?')) return;
+  if (!confirm('Verifikasi SEMUA indikator yang sudah di-approve di SEMUA unit?')) return;
 
   try {
-    const response = await axios.post('/validasi-capaian-indikator/validate-all', {
+    const response = await axios.post('/verifikasi-capaian-indikator/validate-all', {
       tahun: props.tahunDipilih,
       bulan: props.bulanDipilih,
     });
@@ -521,7 +660,7 @@ async function validasiSemuaUnit() {
     window.location.reload();
   } catch (error) {
     console.error('Error validating all:', error);
-    alert('Gagal melakukan validasi');
+    alert('Gagal melakukan verifikasi');
   }
 }
 
@@ -531,15 +670,15 @@ async function rejectSemuaUnit() {
     return;
   }
 
-  if (!props.validasiTerbuka) {
-    alert('Periode validasi sudah ditutup');
+  if (!props.verifikasiTerbuka) {
+    alert('Periode verifikasi sudah ditutup');
     return;
   }
 
   if (!confirm('Reject SEMUA indikator yang sudah di-approve di SEMUA unit? Indikator akan kembali ke status belum approve.')) return;
 
   try {
-    const response = await axios.post('/validasi-capaian-indikator/reject-all', {
+    const response = await axios.post('/verifikasi-capaian-indikator/reject-all', {
       tahun: props.tahunDipilih,
       bulan: props.bulanDipilih,
     });
@@ -595,7 +734,7 @@ function closeDetailModal() {
   showDetailModal.value = false;
   selectedUnit.value = null;
   selectedTimUnitFilter.value = '';
-  filterValidasiStatus.value = '';
+  filterVerifikasiStatus.value = '';
   detailCapaian.value = [];
   allDetailCapaian.value = [];
 }
@@ -605,7 +744,7 @@ const _unregisterAutoSave = registerAutoSave(async () => {
   // 1. Jika modal komentar terbuka dengan teks yang belum dikirim
   if (showKomentarModal.value && komentarText.value.trim() && selectedIndikator.value) {
     try {
-      await axios.post('/validasi-capaian-indikator/send-komentar', {
+      await axios.post('/verifikasi-capaian-indikator/send-komentar', {
         indikator_id: selectedIndikator.value.id,
         kode_unit: selectedUnit.value?.unit_kode,
         tahun: props.tahunDipilih,
@@ -634,21 +773,21 @@ onUnmounted(_unregisterAutoSave)
 </script>
 
 <template>
-  <Head title="Validasi Capaian Indikator" />
+  <Head title="Verifikasi Capaian Indikator" />
   <AppLayout :breadcrumbs="breadcrumbs">
     <div class="flex h-full flex-1 flex-col gap-3 p-4 xl:p-6">
       <div class="flex flex-1 min-h-0 flex-col rounded-xl border border-l-4 border-sidebar-border/70 bg-white p-5 shadow-md dark:border-sidebar-border xl:p-6">
         <h3 class="text-xl font-bold text-gray-800 dark:text-gray-100 text-center mb-4">
-          VALIDASI CAPAIAN INDIKATOR
+          VERIFIKASI CAPAIAN INDIKATOR
         </h3>
 
         <!-- Compact Header Row -->
         <div class="mb-4 grid gap-3 md:grid-cols-3">
-          <!-- Pilih Bulan Validasi -->
+          <!-- Pilih Bulan Verifikasi -->
           <div>
             <label class="block text-xs font-medium text-gray-700 mb-1">
               <CalendarDays :size="14" class="inline mr-1" />
-              Pilih Bulan Validasi
+              Pilih Bulan Verifikasi
             </label>
             <select 
               v-model="selectedMonth"
@@ -661,18 +800,18 @@ onUnmounted(_unregisterAutoSave)
             </select>
           </div>
 
-          <!-- Status Validasi -->
+          <!-- Status Verifikasi -->
           <div class="rounded-lg border-l-4 border-purple-500 bg-purple-50 px-3 py-2">
-            <p class="text-xs text-gray-600 mb-1">Status Validasi</p>
+            <p class="text-xs text-gray-600 mb-1">Status Verifikasi</p>
             <p class="text-sm font-semibold" :class="statusColor">
               {{ statusMessage }}
             </p>
             <p v-if="isBulanBerjalan" class="text-xs text-gray-500 mt-0.5">Batas: {{ tanggalBatas }}</p>
           </div>
 
-          <!-- Progress Validasi -->
+          <!-- Progress Verifikasi -->
           <div class="rounded-lg border-l-4 border-orange-500 bg-orange-50 px-3 py-2">
-            <p class="text-xs text-gray-600 mb-1">Progress Validasi</p>
+            <p class="text-xs text-gray-600 mb-1">Progress Verifikasi</p>
             <p class="text-sm font-semibold text-orange-700">
               {{ totalValidated }} / {{ totalIndikator }}
             </p>
@@ -692,7 +831,7 @@ onUnmounted(_unregisterAutoSave)
             <p class="text-xs font-semibold text-blue-800">Mode Lihat History</p>
             <p class="text-xs text-blue-600 mt-0.5">
               Anda sedang melihat data bulan {{ namaBulanDipilih }} {{ tahunDipilih }}. 
-              Validasi hanya bisa dilakukan pada bulan berjalan.
+              Verifikasi hanya bisa dilakukan pada bulan berjalan.
             </p>
           </div>
         </div>
@@ -714,19 +853,19 @@ onUnmounted(_unregisterAutoSave)
           <div class="flex items-center gap-2">
             
             <button
-              @click="validasiSemuaUnit"
-              :disabled="!validasiTerbuka || !isBulanBerjalan"
+              @click="verifikasiSemuaUnit"
+              :disabled="!verifikasiTerbuka || !isBulanBerjalan"
               class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white shadow-md transition-colors whitespace-nowrap"
-              :class="(validasiTerbuka && isBulanBerjalan) ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'"
+              :class="(verifikasiTerbuka && isBulanBerjalan) ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'"
             >
               <CheckCheck :size="16" />
-              Validasi All
+              Verifikasi All
             </button>
             <!-- <button
               @click="rejectSemuaUnit"
-              :disabled="!validasiTerbuka || !isBulanBerjalan"
+              :disabled="!verifikasiTerbuka || !isBulanBerjalan"
               class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white shadow-md transition-colors whitespace-nowrap"
-              :class="(validasiTerbuka && isBulanBerjalan) ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-400 cursor-not-allowed'"
+              :class="(verifikasiTerbuka && isBulanBerjalan) ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-400 cursor-not-allowed'"
             >
               <AlertCircle :size="16" />
               Reject
@@ -743,8 +882,9 @@ onUnmounted(_unregisterAutoSave)
                 <th class="border px-4 py-3 text-left font-semibold text-gray-700 bg-gray-50">Unit/Bagian</th>
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Jumlah Indikator</th>
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Sudah Approve</th>
-                <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Tervalidasi</th>
-                <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Belum Divalidasi</th>
+                <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Terverifikasi</th>
+                <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Belum Diverifikasi</th>
+                <th v-if="!isAdmin" class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Penilaian PJ Data</th>
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Aksi</th>
               </tr>
             </thead>
@@ -792,6 +932,23 @@ onUnmounted(_unregisterAutoSave)
                     {{ unit.approved_count - unit.validated_count }}
                   </span>
                 </td>
+                <!-- Penilaian PJ Data — hanya tampil untuk non-admin -->
+                <td v-if="!isAdmin" class="border px-4 py-3 text-center">
+                  <div class="flex flex-col items-center gap-1">
+                    <span
+                      v-if="unit.penilaian_pj"
+                      class="inline-block rounded-full px-2 py-0.5 text-xs font-semibold border"
+                      :class="nilaiColorMap[unit.penilaian_pj.nilai ?? ''] ?? 'bg-gray-100 text-gray-600'"
+                    >{{ unit.penilaian_pj.nilai }}</span>
+                    <button
+                      @click="openPenilaianModal(unit)"
+                      class="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-white transition-colors"
+                      :class="unit.penilaian_pj ? 'bg-gray-500 hover:bg-gray-600' : 'bg-indigo-600 hover:bg-indigo-700'"
+                    >
+                      {{ unit.penilaian_pj ? 'Lihat / Edit' : 'Nilai' }}
+                    </button>
+                  </div>
+                </td>
                 <td class="border px-4 py-3 text-center">
                   <button
                     @click="lihatCapaian(unit)"
@@ -800,14 +957,14 @@ onUnmounted(_unregisterAutoSave)
                     :class="unit.approved_count > 0 ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-400 cursor-not-allowed'"
                   >
                     <Eye :size="14" />
-                    {{ isBulanBerjalan ? 'Lihat & Validasi' : 'Lihat Detail' }}
+                    {{ isBulanBerjalan ? 'Lihat & Verifikasi' : 'Lihat Detail' }}
                   </button>
                 </td>
               </tr>
               
               <!-- Empty State for Search -->
               <tr v-if="paginatedData.length === 0">
-                <td colspan="7" class="border px-4 py-8 text-center text-gray-400">
+                <td :colspan="isAdmin ? 7 : 8" class="border px-4 py-8 text-center text-gray-400">
                   <p class="text-sm">Tidak ada data yang sesuai dengan pencarian "{{ searchQuery }}"</p>
                 </td>
               </tr>
@@ -873,19 +1030,19 @@ onUnmounted(_unregisterAutoSave)
               <div class="flex items-center gap-2">
                 <button
                   v-if="isBulanBerjalan && (!selectedUnit?.has_tim_unit || selectedTimUnitFilter)"
-                  @click="validasiUnit"
-                  :disabled="!validasiTerbuka"
+                  @click="verifikasiUnit"
+                  :disabled="!verifikasiTerbuka"
                   class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white transition-colors"
-                  :class="validasiTerbuka ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'"
+                  :class="verifikasiTerbuka ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'"
                 >
                   <CheckCircle :size="16" />
-                  Validasi All
+                  Verifikasi All
                 </button>
                 <button @click="closeDetailModal" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
               </div>
             </div>
 
-            <!-- Filter row: Tim Unit + Status Validasi -->
+            <!-- Filter row: Tim Unit + Status Verifikasi -->
             <div class="flex items-center flex-wrap gap-4">
               <!-- Filter Tim Unit (Jika ada) - wajib dipilih dulu -->
               <div v-if="selectedUnit?.has_tim_unit" class="flex items-center gap-2">
@@ -905,25 +1062,25 @@ onUnmounted(_unregisterAutoSave)
                 </select>
               </div>
 
-              <!-- Filter Status Validasi -->
+              <!-- Filter Status Verifikasi -->
               <div v-if="allDetailCapaian.length > 0 && (!selectedUnit?.has_tim_unit || selectedTimUnitFilter)" class="flex items-center gap-2">
                 <label class="text-xs font-medium text-gray-600">Status:</label>
                 <div class="flex overflow-hidden rounded-lg border border-gray-200 text-xs">
                   <button
-                    @click="filterValidasiStatus = ''"
+                    @click="filterVerifikasiStatus = ''"
                     class="px-3 py-1.5 transition-colors"
-                    :class="filterValidasiStatus === '' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'"
+                    :class="filterVerifikasiStatus === '' ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'"
                   >Semua</button>
                   <button
-                    @click="filterValidasiStatus = 'not_validated'"
+                    @click="filterVerifikasiStatus = 'not_validated'"
                     class="border-l border-gray-200 px-3 py-1.5 transition-colors"
-                    :class="filterValidasiStatus === 'not_validated' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'"
-                  >Belum Divalidasi</button>
+                    :class="filterVerifikasiStatus === 'not_validated' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'"
+                  >Belum Diverifikasi</button>
                   <button
-                    @click="filterValidasiStatus = 'validated'"
+                    @click="filterVerifikasiStatus = 'validated'"
                     class="border-l border-gray-200 px-3 py-1.5 transition-colors"
-                    :class="filterValidasiStatus === 'validated' ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'"
-                  >Tervalidasi</button>
+                    :class="filterVerifikasiStatus === 'validated' ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'"
+                  >Terverifikasi</button>
                 </div>
               </div>
             </div>
@@ -951,8 +1108,8 @@ onUnmounted(_unregisterAutoSave)
 
             <div v-else-if="displayedCapaian.length === 0" class="text-center py-12 text-gray-400">
               <AlertCircle :size="48" class="mx-auto mb-3 opacity-50" />
-              <p v-if="filterValidasiStatus === 'validated'">Belum ada indikator yang tervalidasi</p>
-              <p v-else>Belum ada indikator yang belum divalidasi</p>
+              <p v-if="filterVerifikasiStatus === 'validated'">Belum ada indikator yang terverifikasi</p>
+              <p v-else>Belum ada indikator yang belum diverifikasi</p>
             </div>
 
             <div v-else class="space-y-4">
@@ -978,7 +1135,7 @@ onUnmounted(_unregisterAutoSave)
                   
                   <div v-if="item.validated" class="flex items-center gap-2 text-green-600 text-sm font-medium">
                     <CheckCircle :size="16" />
-                    Tervalidasi
+                    Terverifikasi
                   </div>
                 </div>
 
@@ -1106,22 +1263,18 @@ onUnmounted(_unregisterAutoSave)
                     ></textarea>
                   </div>
                   <div>
-                    <label class="block text-xs font-medium text-gray-700 mb-1">
-                      <Sparkles :size="12" class="inline mr-1 text-purple-500" />
-                      Rekomendasi
-                    </label>
-                    <div
-                      v-if="item.rekomendasi"
-                      class="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-xs text-gray-700 leading-relaxed text-justify"
-                      style="min-height: 88px; white-space: pre-wrap;"
-                    >{{ item.rekomendasi }}</div>
-                    <div
-                      v-else
-                      class="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-400 italic flex items-center justify-center"
-                      style="min-height: 88px;"
-                    >
-                      Data numerator/denominator belum terisi
-                    </div>
+                    <RekomendasiAI
+                      :indikator="item.indikator"
+                      :standar="item.standar"
+                      :satuan="item.satuan"
+                      :n="item.numerator ?? undefined"
+                      :d="item.denominator ?? undefined"
+                      :bulan="props.namaBulanDipilih"
+                      :unit="selectedUnit?.unit_nama"
+                      :delay="index * 1500"
+                      :validated="item.validated"
+                      @apply="(a, r) => { item.analisis = a; item.rtl = r; saveAnalisisAdmin(item); }"
+                    />
                   </div>
                 </div>
 
@@ -1139,13 +1292,13 @@ onUnmounted(_unregisterAutoSave)
 
                   <button
   v-if="!item.validated && isBulanBerjalan && (!item.komentar || item.komentar_dibaca)"
-  @click="validasiSingle(item)"
-  :disabled="!validasiTerbuka"
+  @click="verifikasiSingle(item)"
+  :disabled="!verifikasiTerbuka"
   class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm text-white transition-colors"
-  :class="validasiTerbuka ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'"
+  :class="verifikasiTerbuka ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-400 cursor-not-allowed'"
 >
   <CheckCircle :size="14" />
-  Validasi
+  Verifikasi
 </button>
 
                   <div v-if="item.komentar && !item.komentar_dibaca && !item.validated" class="text-xs text-orange-600 italic">
@@ -1153,7 +1306,7 @@ onUnmounted(_unregisterAutoSave)
 </div>
 <div v-if="item.komentar && item.komentar_dibaca && !item.validated" class="text-xs text-green-600 italic flex items-center gap-1">
   <CheckCircle :size="12" />
-  Catatan sudah direvisi, siap divalidasi
+  Catatan sudah direvisi, siap diverifikasi
 </div>
                 </div>
               </div>
@@ -1204,6 +1357,230 @@ onUnmounted(_unregisterAutoSave)
         </div>
       </div>
     </Teleport>
+    <!-- Modal Penilaian PJ Data — Tabbed (hanya untuk non-admin) -->
+    <Teleport to="body">
+      <div v-if="showPenilaianModal && !isAdmin" class="fixed inset-0 z-[99999] flex items-center justify-center bg-black/50 p-3">
+        <div class="w-full max-w-2xl rounded-2xl bg-white shadow-2xl flex flex-col max-h-[92vh]">
+
+          <!-- Header -->
+          <div class="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600 rounded-t-2xl px-5 py-4 flex-shrink-0">
+            <div>
+              <h4 class="text-base font-bold text-white">Penilaian PJ Data</h4>
+              <p class="text-xs text-indigo-200 mt-0.5">{{ penilaianUnit?.unit_nama }} &bull; {{ namaBulanDipilih }} {{ tahunDipilih }}</p>
+            </div>
+            <!-- Nilai badge (auto-hitung) -->
+            <div class="flex items-center gap-3">
+              <div v-if="nilaiHitung" class="text-center">
+                <span
+                  class="inline-block rounded-full px-3 py-1 text-xs font-bold border"
+                  :class="nilaiColorMap[nilaiHitung] ?? 'bg-gray-100 text-gray-600 border-gray-200'"
+                >{{ nilaiHitung }}</span>
+                <div class="text-[10px] text-indigo-200 mt-0.5">{{ nilaiPct }}% Ya</div>
+              </div>
+              <button @click="showPenilaianModal = false" class="rounded-lg p-1 text-white/70 hover:bg-white/20 hover:text-white transition-colors">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Tab bar -->
+          <div class="flex border-b border-gray-200 flex-shrink-0 bg-gray-50">
+            <button
+              v-for="tab in [
+                { key: 'aspek',       label: 'Aspek Penilaian', icon: '✓' },
+                { key: 'temuan',      label: 'Temuan & Analisa', icon: '🔍' },
+                { key: 'rekomendasi', label: 'Rekomendasi',      icon: '📋' },
+              ]"
+              :key="tab.key"
+              @click="penilaianTab = tab.key as any"
+              class="flex-1 py-2.5 text-xs font-semibold transition-all border-b-2"
+              :class="penilaianTab === tab.key
+                ? 'border-indigo-600 text-indigo-700 bg-white'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-100'"
+            >
+              <span class="mr-1">{{ tab.icon }}</span>{{ tab.label }}
+            </button>
+          </div>
+
+          <!-- Tab content (scrollable) -->
+          <div class="flex-1 overflow-y-auto p-5">
+
+            <!-- ===== TAB 1: ASPEK PENILAIAN ===== -->
+            <div v-if="penilaianTab === 'aspek'">
+              <p class="text-xs text-gray-500 mb-3 italic">Centang <strong>Ya</strong> jika terpenuhi, <strong>Tidak</strong> jika tidak. Nilai dihitung otomatis (≥80% = Baik, 60–79% = Cukup, &lt;60% = Kurang).</p>
+              <div class="space-y-2">
+                <div
+                  v-for="(asp, i) in penilaianAspek"
+                  :key="i"
+                  class="flex items-center justify-between rounded-lg border px-3 py-2.5 text-sm transition-colors"
+                  :class="asp.nilai === 'ya' ? 'border-green-200 bg-green-50' : asp.nilai === 'tidak' ? 'border-red-100 bg-red-50' : 'border-gray-200 bg-white'"
+                >
+                  <span class="flex-1 pr-3 text-gray-700">
+                    <span class="font-medium text-gray-400 mr-1.5 text-xs">{{ i + 1 }}.</span>{{ asp.item }}
+                  </span>
+                  <div class="flex gap-2 flex-shrink-0">
+                    <button
+                      @click="penilaianAspek[i].nilai = 'ya'"
+                      class="rounded-full px-3 py-1 text-xs font-semibold border transition-all"
+                      :class="asp.nilai === 'ya' ? 'bg-green-500 text-white border-green-500 shadow-sm' : 'border-gray-300 text-gray-500 hover:border-green-400 hover:text-green-600'"
+                    >Ya</button>
+                    <button
+                      @click="penilaianAspek[i].nilai = 'tidak'"
+                      class="rounded-full px-3 py-1 text-xs font-semibold border transition-all"
+                      :class="asp.nilai === 'tidak' ? 'bg-red-500 text-white border-red-500 shadow-sm' : 'border-gray-300 text-gray-500 hover:border-red-400 hover:text-red-600'"
+                    >Tidak</button>
+                  </div>
+                </div>
+              </div>
+              <!-- Progress -->
+              <div class="mt-4 rounded-lg bg-gray-50 border border-gray-200 p-3">
+                <div class="flex items-center justify-between text-xs text-gray-600 mb-1.5">
+                  <span>Progress pengisian</span>
+                  <span>{{ penilaianAspek.filter(a => a.nilai !== null).length }} / {{ penilaianAspek.length }}</span>
+                </div>
+                <div class="h-2 rounded-full bg-gray-200 overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-300"
+                    :class="nilaiHitung === 'Baik' ? 'bg-blue-500' : nilaiHitung === 'Cukup' ? 'bg-yellow-500' : nilaiHitung ? 'bg-red-500' : 'bg-gray-300'"
+                    :style="`width: ${nilaiPct}%`"
+                  ></div>
+                </div>
+                <div class="mt-1 text-center text-xs font-semibold" :class="nilaiHitung === 'Baik' ? 'text-blue-600' : nilaiHitung === 'Cukup' ? 'text-yellow-600' : nilaiHitung ? 'text-red-600' : 'text-gray-400'">
+                  {{ nilaiHitung ? `${nilaiPct}% → ${nilaiHitung}` : 'Belum ada penilaian' }}
+                </div>
+              </div>
+            </div>
+
+            <!-- ===== TAB 2: TEMUAN & ANALISA ===== -->
+            <div v-if="penilaianTab === 'temuan'" class="space-y-4">
+              <p class="text-xs text-gray-500 italic">Pilih kondisi yang sesuai berdasarkan hasil pemeriksaan data.</p>
+
+              <div v-for="(row, ri) in [
+                { label: 'Kesesuaian dengan sumber data', model: 'temuan_kesesuaian', opts: [{ val: 'sesuai', label: 'Sesuai', color: 'green' }, { val: 'tidak_sesuai', label: 'Tidak Sesuai', color: 'red' }] },
+                { label: 'Tingkat kelengkapan data',       model: 'temuan_kelengkapan', opts: [{ val: 'lengkap', label: 'Lengkap', color: 'green' }, { val: 'tidak_lengkap', label: 'Tidak Lengkap', color: 'red' }] },
+                { label: 'Ketepatan perhitungan',          model: 'temuan_ketepatan',  opts: [{ val: 'tepat', label: 'Tepat', color: 'green' }, { val: 'tidak_tepat', label: 'Tidak Tepat', color: 'red' }] },
+                { label: 'Validitas data',                 model: 'temuan_validitas',  opts: [{ val: 'valid', label: 'Valid', color: 'green' }, { val: 'tidak_valid', label: 'Tidak Valid', color: 'red' }] },
+              ]" :key="ri" class="rounded-lg border border-gray-200 p-3">
+                <p class="text-sm font-medium text-gray-700 mb-2">{{ ri + 1 }}. {{ row.label }}</p>
+                <div class="flex gap-3">
+                  <button
+                    v-for="opt in row.opts"
+                    :key="opt.val"
+                    @click="ri === 0 ? temuanKesesuaian = temuanKesesuaian === opt.val ? null : opt.val
+                          : ri === 1 ? temuanKelengkapan = temuanKelengkapan === opt.val ? null : opt.val
+                          : ri === 2 ? temuanKetepatan = temuanKetepatan === opt.val ? null : opt.val
+                          : temuanValiditas = temuanValiditas === opt.val ? null : opt.val"
+                    class="flex-1 rounded-lg border-2 py-2 text-sm font-semibold transition-all"
+                    :class="(ri === 0 ? temuanKesesuaian : ri === 1 ? temuanKelengkapan : ri === 2 ? temuanKetepatan : temuanValiditas) === opt.val
+                      ? (opt.color === 'green' ? 'bg-green-500 text-white border-green-500' : 'bg-red-500 text-white border-red-500')
+                      : 'border-gray-200 text-gray-500 hover:border-gray-400'"
+                  >{{ opt.label }}</button>
+                </div>
+              </div>
+
+              <!-- Catatan -->
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Catatan tambahan (opsional)</label>
+                <textarea v-model="penilaianCatatan" rows="3"
+                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+                  placeholder="Catatan temuan atau kondisi khusus..."
+                ></textarea>
+              </div>
+            </div>
+
+            <!-- ===== TAB 3: REKOMENDASI PERBAIKAN ===== -->
+            <div v-if="penilaianTab === 'rekomendasi'">
+              <p class="text-xs text-gray-500 italic mb-3">Tambahkan rencana perbaikan berdasarkan temuan di atas.</p>
+              <div class="overflow-x-auto rounded-lg border border-gray-200">
+                <table class="min-w-full text-xs">
+                  <thead class="bg-indigo-50">
+                    <tr>
+                      <th class="px-2 py-2 text-center text-gray-600 font-semibold w-8">No</th>
+                      <th class="px-3 py-2 text-left text-gray-600 font-semibold">Rencana Perbaikan</th>
+                      <th class="px-3 py-2 text-left text-gray-600 font-semibold w-32">Penanggung Jawab</th>
+                      <th class="px-3 py-2 text-left text-gray-600 font-semibold w-28">Target Waktu</th>
+                      <th class="px-3 py-2 text-center text-gray-600 font-semibold w-24">Status</th>
+                      <th class="px-2 py-2 w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, ri) in rekomendasiRows" :key="ri" class="border-t border-gray-100">
+                      <td class="px-2 py-1.5 text-center text-gray-400">{{ ri + 1 }}</td>
+                      <td class="px-2 py-1.5">
+                        <input v-model="rekomendasiRows[ri].rencana" type="text"
+                          class="w-full rounded border border-gray-200 px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none"
+                          placeholder="Deskripsikan rencana perbaikan..." />
+                      </td>
+                      <td class="px-2 py-1.5">
+                        <input v-model="rekomendasiRows[ri].penanggung_jawab" type="text"
+                          class="w-full rounded border border-gray-200 px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none"
+                          placeholder="Nama/jabatan" />
+                      </td>
+                      <td class="px-2 py-1.5">
+                        <input v-model="rekomendasiRows[ri].target_waktu" type="text"
+                          class="w-full rounded border border-gray-200 px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none"
+                          placeholder="mis. 1 bulan" />
+                      </td>
+                      <td class="px-2 py-1.5 text-center">
+                        <select v-model="rekomendasiRows[ri].status"
+                          class="rounded border border-gray-200 px-1 py-1 text-xs focus:border-indigo-400 focus:outline-none"
+                        >
+                          <option value="Belum">Belum</option>
+                          <option value="Proses">Proses</option>
+                          <option value="Selesai">Selesai</option>
+                        </select>
+                      </td>
+                      <td class="px-2 py-1.5 text-center">
+                        <button @click="removeRekomendasiRow(ri)" class="text-red-400 hover:text-red-600" title="Hapus baris">
+                          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                          </svg>
+                        </button>
+                      </td>
+                    </tr>
+                    <tr v-if="rekomendasiRows.length === 0">
+                      <td colspan="6" class="py-6 text-center text-xs text-gray-400 italic">Belum ada rencana perbaikan. Klik "+ Tambah Baris" untuk menambahkan.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <button @click="addRekomendasiRow" class="mt-3 flex items-center gap-1.5 rounded-lg border border-dashed border-indigo-300 px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50 transition-colors">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+                </svg>
+                Tambah Baris
+              </button>
+            </div>
+
+          </div><!-- end scrollable content -->
+
+          <!-- Footer -->
+          <div class="flex items-center justify-between border-t border-gray-200 px-5 py-3 flex-shrink-0 bg-gray-50 rounded-b-2xl">
+            <div class="flex gap-1">
+              <button v-if="penilaianTab !== 'aspek'" @click="penilaianTab = penilaianTab === 'rekomendasi' ? 'temuan' : 'aspek'"
+                class="rounded-lg border border-gray-300 px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100">← Sebelumnya</button>
+              <button v-if="penilaianTab !== 'rekomendasi'" @click="penilaianTab = penilaianTab === 'aspek' ? 'temuan' : 'rekomendasi'"
+                class="rounded-lg border border-indigo-300 px-3 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50">Selanjutnya →</button>
+            </div>
+            <div class="flex gap-2">
+              <button @click="showPenilaianModal = false"
+                class="rounded-lg border border-gray-300 px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Batal</button>
+              <button @click="savePenilaian" :disabled="penilaianLoading"
+                class="flex items-center gap-2 rounded-lg px-4 py-1.5 text-sm text-white transition-colors"
+                :class="!penilaianLoading ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-gray-400 cursor-not-allowed'"
+              >
+                <span v-if="penilaianLoading" class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+                Simpan Penilaian
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </Teleport>
+
   </AppLayout>
 </template>
 

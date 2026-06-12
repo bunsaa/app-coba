@@ -20,9 +20,8 @@ const captchaImage = ref('');
 const captchaInput = ref('');
 const captchaLoading = ref(false);
 
-// Auto-aktif tanggal 15 s/d 5 bulan berikutnya, nonaktif tanggal 6–14
-const _day = new Date().getDate();
-const modePerilaku = ref(_day >= 15 || _day <= 5);
+const modePerilaku = ref(false);
+const csrfToken = (document.querySelector('meta[name="csrf-token"]') as HTMLMetaElement)?.content ?? '';
 
 const refreshCaptcha = async () => {
     captchaLoading.value = true;
@@ -199,6 +198,7 @@ onMounted(() => refreshCaptcha());
                         v-slot="{ errors, processing }"
                         class="space-y-4"
                     >
+                        <input type="hidden" name="_token" :value="csrfToken">
                         <!-- NIP -->
                         <div>
                             <label for="nip" class="mb-1.5 block text-[12px] font-bold uppercase tracking-wider text-slate-400 dark:text-slate-400">NIP</label>

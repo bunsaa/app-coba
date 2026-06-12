@@ -24,7 +24,10 @@ const user = computed(() => (page.props as any).auth?.user);
 // Auto-logout setelah 1 jam tidak aktif
 const handleAutoLogout = async () => {
     await executeAllAutoSaves()
-    router.post('/logout')
+    router.post('/logout', {}, {
+        onSuccess: () => { window.location.href = '/login'; },
+        onError: () => { window.location.href = '/login'; },
+    })
 }
 
 const { isWarningVisible, secondsRemaining, resetActivity } = useIdleTimer(handleAutoLogout)

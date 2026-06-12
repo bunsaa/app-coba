@@ -9,6 +9,8 @@ use App\Models\TimUnits;
 use App\Models\Indikator;
 use App\Models\CapaianIndikator;
 use App\Models\CapaianLampiran;
+use App\Models\PenilaianPjData;
+use App\Models\User;
 use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 use App\Services\RekomendasiService;
@@ -186,6 +188,18 @@ class CapaianIndikatorController extends Controller
                     'is_prioritas' => (bool) $indikator->is_prioritas,
                     'indikator' => $indikator->indikator,
                     'standar' => $indikator->standar,
+                    'standar_tw1' => $indikator->standar_tw1,
+                    'satuan_tw1' => $indikator->satuan_tw1,
+                    'satuan_waktu_tw1' => $indikator->satuan_waktu_tw1,
+                    'standar_tw2' => $indikator->standar_tw2,
+                    'satuan_tw2' => $indikator->satuan_tw2,
+                    'satuan_waktu_tw2' => $indikator->satuan_waktu_tw2,
+                    'standar_tw3' => $indikator->standar_tw3,
+                    'satuan_tw3' => $indikator->satuan_tw3,
+                    'satuan_waktu_tw3' => $indikator->satuan_waktu_tw3,
+                    'standar_tw4' => $indikator->standar_tw4,
+                    'satuan_tw4' => $indikator->satuan_tw4,
+                    'satuan_waktu_tw4' => $indikator->satuan_waktu_tw4,
                     'satuan' => $indikator->satuan ?? 'persen',
                     'satuan_waktu' => $indikator->satuan_waktu,
                     'numeratorDesc' => $indikator->numerator,
@@ -245,6 +259,35 @@ if ($selectedUnitCode) {
         if ($selectedUnitCode && $selectedUnit && $selectedUnit->tim_units && count($selectedUnit->tim_units) > 0) {
             $viewMonthKeys = [1=>'jan',2=>'feb',3=>'mar',4=>'apr',5=>'may',6=>'jun',7=>'jul',8=>'aug',9=>'sep',10=>'oct',11=>'nov',12=>'des'];
             $monthKey = $viewMonthKeys[$viewMonth];
+
+            // Pre-fetch PJ Data users untuk setiap tim (name lookup)
+            $pjDataUserMap = User::where('kode_unit', $selectedUnitCode)
+                ->where('role', 'like', 'PJ Data - %')
+                ->get()
+                ->mapWithKeys(function($u) {
+                    $timName = str_replace('PJ Data - ', '', $u->role);
+                    return [$timName => $u->name];
+                });
+
+            // Pre-fetch Penilai PJ Data users per tim (untuk menentukan apakah tim perlu validasi dulu)
+            $penilaiTimMap = User::where('kode_unit', $selectedUnitCode)
+                ->where('role', 'like', 'penilai_pj_data - %')
+                ->get()
+                ->mapWithKeys(function($u) {
+                    $timName = str_replace('penilai_pj_data - ', '', $u->role);
+                    return [$timName => true];
+                });
+
+            // Pre-fetch penilaian per-tim untuk bulan yang sedang dilihat (non-admin only)
+            $timPenilaianMap = collect();
+            if (!$isAdminMutu) {
+                $timPenilaianMap = PenilaianPjData::where('kode_unit', $selectedUnitCode)
+                    ->where('tahun', $tahun)
+                    ->where('bulan', $viewMonth)
+                    ->whereNotNull('nama_tim')
+                    ->get()
+                    ->keyBy('nama_tim');
+            }
 
             // Pre-fetch ALL indikators for this unit's tims in ONE query (replaces N pluck queries)
             $allTimNames = $selectedUnit->tim_units->pluck('nama_tim')->toArray();
@@ -361,8 +404,10 @@ if ($selectedUnitCode) {
                         }
                     }
 
+                    $timPenilaian = $timPenilaianMap->get($tim->nama_tim);
                     $timApprovalSummary[] = [
                         'nama_tim' => $tim->nama_tim,
+                        'pj_data_nama' => $pjDataUserMap->get($tim->nama_tim) ?? null,
                         'total_indikator' => $totalIndikator,
                         'approved' => $approvedCount,
                         'not_approved' => $notApprovedCount,
@@ -371,11 +416,36 @@ if ($selectedUnitCode) {
                         'by_jenis' => $byJenis,
                         'by_jenis_approved' => $byJenisApproved,
                         'by_jenis_not_approved' => $byJenisNotApproved,
+                        'has_penilai' => $penilaiTimMap->has($tim->nama_tim),
+                        'penilaian_pj' => $timPenilaian
+                            ? PenilaianPjDataController::formatPenilaian($timPenilaian)
+                            : null,
                     ];
                 }
             }
         }
         
+        // Fetch penilaian PJ data — hanya untuk non-admin (PJ Data & kepala bagian/bidang melihat)
+        $penilaianPjData = [];
+        if ($selectedUnitCode && !$isAdminMutu) {
+            $quarterBulanMap = [1 => [1,2,3], 2 => [4,5,6], 3 => [7,8,9], 4 => [10,11,12]];
+            $bulanList = $quarterBulanMap[$quarter];
+            $penilaianQuery = PenilaianPjData::where('kode_unit', $selectedUnitCode)
+                ->where('tahun', $tahun)
+                ->whereIn('bulan', $bulanList);
+
+            // PJ Data hanya melihat penilaian untuk tim mereka sendiri
+            if ($isPjData) {
+                $pjDataTimName = str_replace('PJ Data - ', '', $user->role);
+                $penilaianQuery->where('nama_tim', $pjDataTimName);
+            }
+
+            $penilaianList = $penilaianQuery->get();
+            foreach ($penilaianList as $p) {
+                $penilaianPjData[$p->bulan] = PenilaianPjDataController::formatPenilaian($p);
+            }
+        }
+
         return Inertia::render('Capaian-Indikator', [
             'units' => $units,
             'selectedUnit' => $selectedUnit,
@@ -394,6 +464,7 @@ if ($selectedUnitCode) {
             'userRole' => $user->role ?? 'staf',
             'timApprovalSummary' => $timApprovalSummary,
             'viewMonth' => (int) $viewMonth,
+            'penilaianPjData' => $penilaianPjData,
         ]);
     }
 
@@ -970,6 +1041,16 @@ if ($selectedUnitCode) {
         ]);
 
         $bulan = $validated['bulan'];
+
+        // Hitung TW dari bulan untuk standar/satuan per-TW
+        $monthToTw = [
+            'jan' => 1, 'feb' => 1, 'mar' => 1,
+            'apr' => 2, 'may' => 2, 'jun' => 2,
+            'jul' => 3, 'aug' => 3, 'sep' => 3,
+            'oct' => 4, 'nov' => 4, 'des' => 4,
+        ];
+        $tw = $monthToTw[$bulan] ?? 1;
+
         $rekomendasiService = new RekomendasiService();
 
         // Get indikators - if tim_unit is 'all', get all indikators for this unit (for units without teams)
@@ -987,7 +1068,7 @@ if ($selectedUnitCode) {
 
         $indikators = $query->get();
 
-        $result = $indikators->map(function($indikator) use ($bulan, $rekomendasiService) {
+        $result = $indikators->map(function($indikator) use ($bulan, $tw, $rekomendasiService) {
             $capaian = $indikator->capaian->first();
 
             $n = $capaian ? $capaian->{$bulan . '_n'} : null;
@@ -1003,19 +1084,23 @@ if ($selectedUnitCode) {
             $hasKomentar = !empty($komentar);
             $isRevised = $capaian ? (bool) $capaian->{$bulan . '_revised'} : false;
 
+            // Resolve standar/satuan per TW (fallback ke nilai lama)
+            $standar = $indikator->{"standar_tw{$tw}"} ?? $indikator->standar ?? '';
+            $satuan  = $indikator->{"satuan_tw{$tw}"}  ?? $indikator->satuan  ?? 'persen';
+
             $recommendation = $rekomendasiService->generate(
                 $indikator->indikator,
-                $indikator->standar,
+                $standar,
                 $n !== null ? (float) $n : null,
                 $d !== null ? (float) $d : null,
-                $indikator->satuan ?? 'persen',
+                $satuan,
                 $indikator->jenis_indikator ?? null
             );
 
             return [
                 'id' => $indikator->id,
                 'indikator' => $indikator->indikator,
-                'standar' => $indikator->standar,
+                'standar' => $standar,
                 'n' => $n,
                 'd' => $d,
                 'has_data' => $hasData,
@@ -1128,6 +1213,18 @@ if ($selectedUnitCode) {
             'capaian_id' => $capaian ? $capaian->id : null,
             'indikator' => $indikator->indikator,
             'standar' => $indikator->standar,
+            'standar_tw1' => $indikator->standar_tw1,
+            'satuan_tw1' => $indikator->satuan_tw1,
+            'satuan_waktu_tw1' => $indikator->satuan_waktu_tw1,
+            'standar_tw2' => $indikator->standar_tw2,
+            'satuan_tw2' => $indikator->satuan_tw2,
+            'satuan_waktu_tw2' => $indikator->satuan_waktu_tw2,
+            'standar_tw3' => $indikator->standar_tw3,
+            'satuan_tw3' => $indikator->satuan_tw3,
+            'satuan_waktu_tw3' => $indikator->satuan_waktu_tw3,
+            'standar_tw4' => $indikator->standar_tw4,
+            'satuan_tw4' => $indikator->satuan_tw4,
+            'satuan_waktu_tw4' => $indikator->satuan_waktu_tw4,
             'numerator_desc' => $indikator->numerator,
             'denominator_desc' => $indikator->denominator,
             'satuan' => $indikator->satuan ?? 'persen',

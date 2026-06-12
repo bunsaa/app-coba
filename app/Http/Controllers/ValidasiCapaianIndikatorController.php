@@ -9,6 +9,7 @@ use App\Models\TimUnits;
 use App\Models\Indikator;
 use App\Models\CapaianIndikator;
 use App\Models\CapaianLampiran;
+use App\Models\PenilaianPjData;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -18,6 +19,9 @@ class ValidasiCapaianIndikatorController extends Controller
 {
     public function index(Request $request)
     {
+        $user = Auth::user();
+        $isAdminMutu = ($user->role === 'admin_mutu' || $user->email === 'admin@mutu.rsud.go.id');
+
         // Get selected month/year from request or use current
         $bulanDipilih = $request->input('bulan', Carbon::now()->month);
         $tahunDipilih = $request->input('tahun', Carbon::now()->year);
@@ -94,6 +98,28 @@ class ValidasiCapaianIndikatorController extends Controller
             ];
         }
 
+        // Fetch penilaian PJ data — hanya untuk non-admin (kepala bagian/bidang)
+        if (!$isAdminMutu) {
+            $penilaianPjList = PenilaianPjData::where('tahun', $tahunDipilih)
+                ->where('bulan', $bulanDipilih)
+                ->get()
+                ->keyBy('kode_unit');
+
+            foreach ($dataValidasi as &$item) {
+                $penilaian = $penilaianPjList->get($item['unit_kode']);
+                $item['penilaian_pj'] = $penilaian
+                    ? PenilaianPjDataController::formatPenilaian($penilaian)
+                    : null;
+            }
+            unset($item);
+        } else {
+            // Admin tidak melihat penilaian PJ
+            foreach ($dataValidasi as &$item) {
+                $item['penilaian_pj'] = null;
+            }
+            unset($item);
+        }
+
         // Generate month options (12 months back from current)
         $monthOptions = [];
         for ($i = 0; $i < 12; $i++) {
@@ -105,17 +131,18 @@ class ValidasiCapaianIndikatorController extends Controller
             ];
         }
 
-        return Inertia::render('Validasi-Capaian-Indikator', [
-            'dataValidasi' => $dataValidasi,
+        return Inertia::render('Verifikasi-Capaian-Indikator', [
+            'dataVerifikasi' => $dataValidasi,
             'bulanDipilih' => $bulanDipilih,
             'tahunDipilih' => $tahunDipilih,
             'namaBulanDipilih' => $namaBulan[$bulanDipilih],
             'bulanSekarang' => $bulanSekarang,
             'tahunSekarang' => $tahunSekarang,
             'isBulanBerjalan' => $isBulanBerjalan,
-            'validasiTerbuka' => $validasiTerbuka,
+            'verifikasiTerbuka' => $validasiTerbuka,
             'tanggalBatas' => $tanggalBatasValidasi->format('d F Y'),
             'monthOptions' => $monthOptions,
+            'isAdmin' => $isAdminMutu,
         ]);
     }
 
@@ -155,12 +182,18 @@ class ValidasiCapaianIndikatorController extends Controller
               ->where('kode_unit', $validated['kode_unit']); // Filter capaian by unit
         }, 'capaian.lampiran'])->get();
 
+        // Hitung TW dari bulan (1-3 → TW1, 4-6 → TW2, 7-9 → TW3, 10-12 → TW4)
+        $tw = (int) ceil($validated['bulan'] / 3);
+
         // Transform data - ONLY APPROVED indicators
-        $capaianData = $indikators->filter(function($indikator) use ($bulan) {
+        $capaianData = $indikators->filter(function($indikator) use ($bulan, $tw) {
             $capaian = $indikator->capaian->first();
-            // Only include if approved for selected month
-            return $capaian && $capaian->{$bulan . '_approved'};
-        })->map(function($indikator) use ($bulan, $validated) {
+            if (!$capaian || !$capaian->{$bulan . '_approved'}) return false;
+            // Sembunyikan jika standar TW ini = '0'
+            $standarTw = $indikator->{"standar_tw{$tw}"};
+            if ($standarTw !== null && $standarTw !== '' && $standarTw === '0') return false;
+            return true;
+        })->map(function($indikator) use ($bulan, $validated, $tw) {
             $capaian = $indikator->capaian->first();
 
             $numerator = $capaian->{$bulan . '_n'};
@@ -170,22 +203,19 @@ class ValidasiCapaianIndikatorController extends Controller
             // Get lampiran for this month
             $lampiran = $capaian->lampiran ? $capaian->lampiran->where('bulan', $bulan)->first() : null;
 
-            // Calculate hasil based on satuan
+            // Gunakan standar/satuan per TW (fallback ke nilai lama)
+            $standar = $indikator->{"standar_tw{$tw}"} ?? $indikator->standar ?? '';
+            $satuan = $indikator->{"satuan_tw{$tw}"} ?? $indikator->satuan ?? 'persen';
+            $satuan_waktu = $indikator->{"satuan_waktu_tw{$tw}"} ?? $indikator->satuan_waktu;
+
+            // Calculate hasil based on satuan TW
             $hasil = null;
             if ($numerator !== null && $denominator !== null && $denominator > 0) {
-                $satuan = $indikator->satuan ?? 'persen';
-
                 if ($satuan === 'rata-rata') {
-                    // Rata-rata = N / D (angka biasa)
                     $hasil = $numerator / $denominator;
-                } elseif ($satuan === 'persen') {
-                    // Persen = (N / D) * 100
-                    $hasil = ($numerator / $denominator) * 100;
                 } elseif ($satuan === 'permil') {
-                    // Permil = (N / D) * 1000
                     $hasil = ($numerator / $denominator) * 1000;
                 } else {
-                    // Default: persen
                     $hasil = ($numerator / $denominator) * 100;
                 }
             }
@@ -198,9 +228,9 @@ class ValidasiCapaianIndikatorController extends Controller
     'id' => $indikator->id,
     'capaian_id' => $capaian->id ?? null,
     'indikator' => $indikator->indikator,
-    'standar' => $indikator->standar,
-    'satuan' => $indikator->satuan ?? 'persen',
-    'satuan_waktu' => $indikator->satuan_waktu,
+    'standar' => $standar,
+    'satuan' => $satuan,
+    'satuan_waktu' => $satuan_waktu,
     'tim_unit' => $indikator->tim_unit,
     'numerator' => $numerator,
     'denominator' => $denominator,
@@ -221,7 +251,7 @@ class ValidasiCapaianIndikatorController extends Controller
 ];
         });
 
-        return response()->json($capaianData);
+        return response()->json($capaianData->values());
     }
 
     public function validateSingle(Request $request)
@@ -650,7 +680,10 @@ class ValidasiCapaianIndikatorController extends Controller
 
         $numerator   = $capaian->{$bulanKey . '_n'};
         $denominator = $capaian->{$bulanKey . '_d'};
-        $satuan      = $indikator->satuan ?? 'persen';
+        $tw          = (int) ceil($validated['bulan'] / 3);
+        $satuan      = $indikator->{"satuan_tw{$tw}"} ?? $indikator->satuan ?? 'persen';
+        $satuan_waktu = $indikator->{"satuan_waktu_tw{$tw}"} ?? $indikator->satuan_waktu;
+        $standar      = $indikator->{"standar_tw{$tw}"} ?? $indikator->standar ?? '';
 
         $hasil = null;
         if ($numerator !== null && $denominator !== null && $denominator > 0) {
@@ -664,7 +697,7 @@ class ValidasiCapaianIndikatorController extends Controller
         }
 
         $hasilFormatted = $hasil !== null
-            ? round($hasil, 2) . ($satuan === 'persen' ? '%' : ($satuan === 'permil' ? '‰' : ' ' . ($indikator->satuan_waktu ?? '')))
+            ? round($hasil, 2) . ($satuan === 'persen' ? '%' : ($satuan === 'permil' ? '‰' : ' ' . ($satuan_waktu ?? '')))
             : 'belum ada data';
 
         $prompt = <<<PROMPT
@@ -673,7 +706,7 @@ Kamu adalah sistem pendukung keputusan mutu layanan rumah sakit yang bertugas me
 Berikan rekomendasi singkat dan spesifik (maksimal 4 kalimat) dalam Bahasa Indonesia untuk indikator mutu berikut:
 
 - **Nama Indikator**: {$indikator->indikator}
-- **Standar/Target**: {$indikator->standar}
+- **Standar/Target**: {$standar}
 - **Satuan**: {$satuan}
 - **Numerator (definisi)**: {$indikator->numerator}
 - **Denominator (definisi)**: {$indikator->denominator}

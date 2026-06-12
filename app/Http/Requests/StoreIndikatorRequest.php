@@ -14,20 +14,30 @@ class StoreIndikatorRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'jenis_indikator' => 'required|in:SPM,INM,IMUT_RS,IMUT_UNIT,PRIORITAS',
-            'kode_unit' => 'nullable|string|exists:units,kode_unit', // Nullable karena bisa multi-unit
-            'tim_unit' => 'nullable|string',
-            'indikator' => 'required|string', // Allow duplicate (1 indikator bisa untuk banyak unit)
-            'standar' => 'required|string',
-            'satuan' => 'required|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
-            'satuan_waktu' => 'nullable|in:hari,jam,menit|required_if:satuan,rata-rata',
-            'pic' => 'nullable|string',
-            'pic_units' => 'nullable|array',
-            'pic_units.*' => 'string',
-            'numerator' => 'required|string',
-            'denominator' => 'required|string',
-            'berlaku_tw' => 'nullable|array',
-            'berlaku_tw.*' => 'integer|in:1,2,3,4',
+            'jenis_indikator'    => 'required|in:SPM,INM,IMUT_RS,IMUT_UNIT,PRIORITAS',
+            'kode_unit'          => 'nullable|string|exists:units,kode_unit',
+            'tim_unit'           => 'nullable|string',
+            'indikator'          => 'required|string',
+            'standar'            => 'nullable|string',
+            'satuan'             => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu'       => 'nullable|in:hari,jam,menit',
+            'standar_tw1'        => 'nullable|string',
+            'satuan_tw1'         => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw1'   => 'nullable|in:hari,jam,menit',
+            'standar_tw2'        => 'nullable|string',
+            'satuan_tw2'         => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw2'   => 'nullable|in:hari,jam,menit',
+            'standar_tw3'        => 'nullable|string',
+            'satuan_tw3'         => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw3'   => 'nullable|in:hari,jam,menit',
+            'standar_tw4'        => 'nullable|string',
+            'satuan_tw4'         => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw4'   => 'nullable|in:hari,jam,menit',
+            'pic'                => 'nullable|string',
+            'pic_units'          => 'nullable|array',
+            'pic_units.*'        => 'string',
+            'numerator'          => 'required|string',
+            'denominator'        => 'required|string',
         ];
     }
 

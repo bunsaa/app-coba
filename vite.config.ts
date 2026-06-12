@@ -7,14 +7,13 @@ import { defineConfig } from 'vite';
 export default defineConfig({
     plugins: [
         laravel({
-            input: ['resources/js/app.ts'],
+            input: ['resources/js/app.ts', 'resources/js/pages/Capaian-Indikator.vue'],
             ssr: 'resources/js/ssr.ts',
             refresh: true,
         }),
         tailwindcss(),
-        wayfinder({
-            formVariants: true,
-        }),
+        // Skip wayfinder saat Docker build (PHP tidak tersedia di Node stage)
+        ...(process.env.SKIP_WAYFINDER ? [] : [wayfinder({ formVariants: true })]),
         vue({
             template: {
                 transformAssetUrls: {

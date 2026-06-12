@@ -59,15 +59,27 @@ class IndikatorsController extends Controller
                         'kode_unit' => $kodeUnit,
                         'tim_unit' => $timUnit,
                         'indikator' => $data['indikator'],
-                        'standar' => $data['standar'],
+                        'standar' => $data['standar'] ?? '',
                         'satuan' => $data['satuan'] ?? 'persen',
                         'satuan_waktu' => $data['satuan_waktu'] ?? null,
+                        'standar_tw1' => $data['standar_tw1'] ?? null,
+                        'satuan_tw1'  => $data['satuan_tw1'] ?? null,
+                        'satuan_waktu_tw1' => $data['satuan_waktu_tw1'] ?? null,
+                        'standar_tw2' => $data['standar_tw2'] ?? null,
+                        'satuan_tw2'  => $data['satuan_tw2'] ?? null,
+                        'satuan_waktu_tw2' => $data['satuan_waktu_tw2'] ?? null,
+                        'standar_tw3' => $data['standar_tw3'] ?? null,
+                        'satuan_tw3'  => $data['satuan_tw3'] ?? null,
+                        'satuan_waktu_tw3' => $data['satuan_waktu_tw3'] ?? null,
+                        'standar_tw4' => $data['standar_tw4'] ?? null,
+                        'satuan_tw4'  => $data['satuan_tw4'] ?? null,
+                        'satuan_waktu_tw4' => $data['satuan_waktu_tw4'] ?? null,
                         'pic' => $timUnit ?: $kodeUnit,
                         'pic_units' => null,
                         'numerator' => $data['numerator'],
                         'denominator' => $data['denominator'],
                         'is_active' => true,
-                        'berlaku_tw' => $data['berlaku_tw'] ?? [1,2,3,4],
+                        'berlaku_tw' => [1,2,3,4],
                     ];
 
                     Indikator::create($indikatorData);
@@ -129,7 +141,16 @@ class IndikatorsController extends Controller
     public function getAllIndikators()
     {
         $indikators = Indikator::with(['unit:kode_unit,nama_unit'])
-            ->select(['id','jenis_indikator','is_prioritas','kode_unit','tim_unit','indikator','numerator','denominator','standar','satuan','satuan_waktu','is_active','berlaku_tw'])
+            ->select([
+                'id','jenis_indikator','is_prioritas','kode_unit','tim_unit','indikator',
+                'numerator','denominator',
+                'standar','satuan','satuan_waktu',
+                'standar_tw1','satuan_tw1','satuan_waktu_tw1',
+                'standar_tw2','satuan_tw2','satuan_waktu_tw2',
+                'standar_tw3','satuan_tw3','satuan_waktu_tw3',
+                'standar_tw4','satuan_tw4','satuan_waktu_tw4',
+                'is_active',
+            ])
             ->orderByRaw("FIELD(jenis_indikator, 'INM', 'SPM', 'PRIORITAS', 'IMUT_RS', 'IMUT_UNIT')")
             ->orderBy('kode_unit')
             ->orderBy('tim_unit')
@@ -137,20 +158,31 @@ class IndikatorsController extends Controller
             ->get()
             ->map(function ($ind) {
                 return [
-                    'id'              => $ind->id,
-                    'jenis_indikator' => $ind->jenis_indikator,
-                    'is_prioritas'    => $ind->is_prioritas,
-                    'kode_unit'       => $ind->kode_unit,
-                    'tim_unit'        => $ind->tim_unit,
-                    'nama_unit'       => $ind->unit?->nama_unit ?? $ind->kode_unit ?? '-',
-                    'indikator'       => $ind->indikator,
-                    'numerator'       => $ind->numerator,
-                    'denominator'     => $ind->denominator,
-                    'standar'         => $ind->standar,
-                    'satuan'          => $ind->satuan,
-                    'satuan_waktu'    => $ind->satuan_waktu,
-                    'is_active'       => $ind->is_active,
-                    'berlaku_tw'      => $ind->berlaku_tw ?? [1,2,3,4],
+                    'id'               => $ind->id,
+                    'jenis_indikator'  => $ind->jenis_indikator,
+                    'is_prioritas'     => $ind->is_prioritas,
+                    'kode_unit'        => $ind->kode_unit,
+                    'tim_unit'         => $ind->tim_unit,
+                    'nama_unit'        => $ind->unit?->nama_unit ?? $ind->kode_unit ?? '-',
+                    'indikator'        => $ind->indikator,
+                    'numerator'        => $ind->numerator,
+                    'denominator'      => $ind->denominator,
+                    'standar'          => $ind->standar,
+                    'satuan'           => $ind->satuan,
+                    'satuan_waktu'     => $ind->satuan_waktu,
+                    'standar_tw1'      => $ind->standar_tw1,
+                    'satuan_tw1'       => $ind->satuan_tw1,
+                    'satuan_waktu_tw1' => $ind->satuan_waktu_tw1,
+                    'standar_tw2'      => $ind->standar_tw2,
+                    'satuan_tw2'       => $ind->satuan_tw2,
+                    'satuan_waktu_tw2' => $ind->satuan_waktu_tw2,
+                    'standar_tw3'      => $ind->standar_tw3,
+                    'satuan_tw3'       => $ind->satuan_tw3,
+                    'satuan_waktu_tw3' => $ind->satuan_waktu_tw3,
+                    'standar_tw4'      => $ind->standar_tw4,
+                    'satuan_tw4'       => $ind->satuan_tw4,
+                    'satuan_waktu_tw4' => $ind->satuan_waktu_tw4,
+                    'is_active'        => $ind->is_active,
                 ];
             });
 
@@ -163,23 +195,45 @@ class IndikatorsController extends Controller
             'original_indikator' => 'required|string',
             'jenis_indikator'    => 'required|string',
             'indikator'          => 'required|string',
-            'standar'            => 'required',
+            'standar'            => 'nullable|string',
             'numerator'          => 'required|string',
             'denominator'        => 'required|string',
-            'satuan'             => 'required|string',
+            'satuan'             => 'nullable|string',
             'satuan_waktu'       => 'nullable|string',
-            'berlaku_tw'         => 'nullable|array',
+            'standar_tw1'        => 'nullable|string',
+            'satuan_tw1'         => 'nullable|string',
+            'satuan_waktu_tw1'   => 'nullable|string',
+            'standar_tw2'        => 'nullable|string',
+            'satuan_tw2'         => 'nullable|string',
+            'satuan_waktu_tw2'   => 'nullable|string',
+            'standar_tw3'        => 'nullable|string',
+            'satuan_tw3'         => 'nullable|string',
+            'satuan_waktu_tw3'   => 'nullable|string',
+            'standar_tw4'        => 'nullable|string',
+            'satuan_tw4'         => 'nullable|string',
+            'satuan_waktu_tw4'   => 'nullable|string',
             'pic_units'          => 'nullable|array',
         ]);
 
         $updateData = [
-            'indikator'    => $request->indikator,
-            'standar'      => $request->standar,
-            'numerator'    => $request->numerator,
-            'denominator'  => $request->denominator,
-            'satuan'       => $request->satuan,
-            'satuan_waktu' => $request->satuan === 'rata-rata' ? $request->satuan_waktu : null,
-            'berlaku_tw'   => $request->berlaku_tw ?? [1, 2, 3, 4],
+            'indikator'        => $request->indikator,
+            'standar'          => $request->standar,
+            'numerator'        => $request->numerator,
+            'denominator'      => $request->denominator,
+            'satuan'           => $request->satuan,
+            'satuan_waktu'     => $request->satuan === 'rata-rata' ? $request->satuan_waktu : null,
+            'standar_tw1'      => $request->standar_tw1,
+            'satuan_tw1'       => $request->satuan_tw1,
+            'satuan_waktu_tw1' => $request->satuan_tw1 === 'rata-rata' ? $request->satuan_waktu_tw1 : null,
+            'standar_tw2'      => $request->standar_tw2,
+            'satuan_tw2'       => $request->satuan_tw2,
+            'satuan_waktu_tw2' => $request->satuan_tw2 === 'rata-rata' ? $request->satuan_waktu_tw2 : null,
+            'standar_tw3'      => $request->standar_tw3,
+            'satuan_tw3'       => $request->satuan_tw3,
+            'satuan_waktu_tw3' => $request->satuan_tw3 === 'rata-rata' ? $request->satuan_waktu_tw3 : null,
+            'standar_tw4'      => $request->standar_tw4,
+            'satuan_tw4'       => $request->satuan_tw4,
+            'satuan_waktu_tw4' => $request->satuan_tw4 === 'rata-rata' ? $request->satuan_waktu_tw4 : null,
         ];
 
         // If pic_units provided, sync units (add/remove records as needed)
@@ -337,7 +391,15 @@ class IndikatorsController extends Controller
             // Jika tim_unit tidak ada: tampilkan SEMUA indikator unit ini tanpa filter tim
             // (unit tidak punya tim di DB, atau auto-load dari view modal)
 
-            $indikators = $query->select(['id','jenis_indikator','kode_unit','tim_unit','indikator','standar','satuan','satuan_waktu','numerator','denominator','is_active','berlaku_tw'])->orderBy('id', 'asc')->get();
+            $indikators = $query->select([
+                'id','jenis_indikator','kode_unit','tim_unit','indikator',
+                'standar','satuan','satuan_waktu',
+                'standar_tw1','satuan_tw1','satuan_waktu_tw1',
+                'standar_tw2','satuan_tw2','satuan_waktu_tw2',
+                'standar_tw3','satuan_tw3','satuan_waktu_tw3',
+                'standar_tw4','satuan_tw4','satuan_waktu_tw4',
+                'numerator','denominator','is_active',
+            ])->orderBy('id', 'asc')->get();
 
             Log::info('Indikators found:', ['count' => $indikators->count()]);
 
@@ -359,14 +421,24 @@ class IndikatorsController extends Controller
         Log::info('Update request received:', $request->all());
 
         $request->validate([
-            'indikator'    => 'required|string',
-            'standar'      => 'required|string',
-            'numerator'    => 'required|string',
-            'denominator'  => 'required|string',
-            'satuan'       => 'required|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
-            'satuan_waktu' => 'nullable|in:hari,jam,menit|required_if:satuan,rata-rata',
-            'berlaku_tw'   => 'nullable|array',
-            'berlaku_tw.*' => 'integer|in:1,2,3,4',
+            'indikator'        => 'required|string',
+            'standar'          => 'nullable|string',
+            'numerator'        => 'required|string',
+            'denominator'      => 'required|string',
+            'satuan'           => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu'     => 'nullable|in:hari,jam,menit',
+            'standar_tw1'      => 'nullable|string',
+            'satuan_tw1'       => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw1' => 'nullable|in:hari,jam,menit',
+            'standar_tw2'      => 'nullable|string',
+            'satuan_tw2'       => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw2' => 'nullable|in:hari,jam,menit',
+            'standar_tw3'      => 'nullable|string',
+            'satuan_tw3'       => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw3' => 'nullable|in:hari,jam,menit',
+            'standar_tw4'      => 'nullable|string',
+            'satuan_tw4'       => 'nullable|in:rata-rata,persen,permil,kejadian,peserta,dokumen',
+            'satuan_waktu_tw4' => 'nullable|in:hari,jam,menit',
         ]);
 
         try {
@@ -375,13 +447,24 @@ class IndikatorsController extends Controller
             Log::info('Before update:', $indikator->toArray());
 
             $indikator->update([
-                'indikator'    => $request->indikator,
-                'standar'      => $request->standar,
-                'numerator'    => $request->numerator,
-                'denominator'  => $request->denominator,
-                'satuan'       => $request->satuan,
-                'satuan_waktu' => $request->satuan === 'rata-rata' ? $request->satuan_waktu : null,
-                'berlaku_tw'   => $request->berlaku_tw ?? [1,2,3,4],
+                'indikator'        => $request->indikator,
+                'standar'          => $request->standar,
+                'numerator'        => $request->numerator,
+                'denominator'      => $request->denominator,
+                'satuan'           => $request->satuan,
+                'satuan_waktu'     => $request->satuan === 'rata-rata' ? $request->satuan_waktu : null,
+                'standar_tw1'      => $request->standar_tw1,
+                'satuan_tw1'       => $request->satuan_tw1,
+                'satuan_waktu_tw1' => $request->satuan_tw1 === 'rata-rata' ? $request->satuan_waktu_tw1 : null,
+                'standar_tw2'      => $request->standar_tw2,
+                'satuan_tw2'       => $request->satuan_tw2,
+                'satuan_waktu_tw2' => $request->satuan_tw2 === 'rata-rata' ? $request->satuan_waktu_tw2 : null,
+                'standar_tw3'      => $request->standar_tw3,
+                'satuan_tw3'       => $request->satuan_tw3,
+                'satuan_waktu_tw3' => $request->satuan_tw3 === 'rata-rata' ? $request->satuan_waktu_tw3 : null,
+                'standar_tw4'      => $request->standar_tw4,
+                'satuan_tw4'       => $request->satuan_tw4,
+                'satuan_waktu_tw4' => $request->satuan_tw4 === 'rata-rata' ? $request->satuan_waktu_tw4 : null,
             ]);
 
             Log::info('After update:', $indikator->fresh()->toArray());

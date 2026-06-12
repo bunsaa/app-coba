@@ -65,8 +65,14 @@ const editPic = ref('');
 const editIndikatorId = ref<number | null>(null); // ID indikator yang sedang di-edit
 const editJenisIndikator = ref(''); // Jenis indikator (read-only display)
 const editIndikatorList = ref<any[]>([]); // List indikator untuk dipilih
-const formEditInd = ref({ indikator: '', standar: '', numerator: '', denominator: '', satuan: 'persen', satuan_waktu: '' });
-const editTwOption = ref<string>('all'); // 'all' | '1' | '2' | '3' | '4'
+const formEditInd = ref({
+  indikator: '',
+  standar_tw1: '', satuan_tw1: 'persen', satuan_waktu_tw1: '',
+  standar_tw2: '', satuan_tw2: 'persen', satuan_waktu_tw2: '',
+  standar_tw3: '', satuan_tw3: 'persen', satuan_waktu_tw3: '',
+  standar_tw4: '', satuan_tw4: 'persen', satuan_waktu_tw4: '',
+  numerator: '', denominator: '',
+});
 const editListLoading = ref(false);
 function resetEditInd() {
   editTimUnit.value = '';
@@ -75,8 +81,14 @@ function resetEditInd() {
   editJenisIndikator.value = '';
   editIndikatorList.value = [];
   editListLoading.value = false;
-  formEditInd.value = { indikator: '', standar: '', numerator: '', denominator: '', satuan: 'persen', satuan_waktu: '' };
-  editTwOption.value = 'all';
+  formEditInd.value = {
+    indikator: '',
+    standar_tw1: '', satuan_tw1: 'persen', satuan_waktu_tw1: '',
+    standar_tw2: '', satuan_tw2: 'persen', satuan_waktu_tw2: '',
+    standar_tw3: '', satuan_tw3: 'persen', satuan_waktu_tw3: '',
+    standar_tw4: '', satuan_tw4: 'persen', satuan_waktu_tw4: '',
+    numerator: '', denominator: '',
+  };
 }
 
 const showAddIndicator = ref(false);
@@ -85,8 +97,15 @@ const selectedUnitName = ref('');
 const selectedTimUnit = ref('');
 const selectedPicUnits = ref<string[]>([]); // Multi-select unit codes untuk PIC
 const picUnitSearch = ref(''); // Search query untuk filter daftar unit/tim di PIC
-const formAddInd = ref<{ jenis_indikator: string; indikator: string; standar: string; satuan: string; satuan_waktu: string; pic: string; numerator: string; denominator: string; berlaku_tw: number[] }>({ jenis_indikator: '', indikator: '', standar: '', satuan: 'persen', satuan_waktu: '', pic: '', numerator: '', denominator: '', berlaku_tw: [1,2,3,4] });
-const formAddTwOption = ref<string>('all'); // 'all' | '1' | '2' | '3' | '4'
+const formAddInd = ref({
+  jenis_indikator: '',
+  indikator: '',
+  standar_tw1: '', satuan_tw1: 'persen', satuan_waktu_tw1: '',
+  standar_tw2: '', satuan_tw2: 'persen', satuan_waktu_tw2: '',
+  standar_tw3: '', satuan_tw3: 'persen', satuan_waktu_tw3: '',
+  standar_tw4: '', satuan_tw4: 'persen', satuan_waktu_tw4: '',
+  pic: '', numerator: '', denominator: '',
+});
 const isSubmitting = ref(false); // Prevent double click saat request sedang diproses
 
 // Draft localStorage untuk form tambah indikator
@@ -131,6 +150,41 @@ const filteredPicUnits = computed(() => {
     (u.tim_units ?? []).some(t => t.nama_tim.toLowerCase().includes(q))
   );
 });
+
+// PIC checkbox helpers: units dengan tim_units auto-select semua tim saat parent diceklis
+function isUnitFullyChecked(unit: Units): boolean {
+  if (!unit.tim_units || unit.tim_units.length === 0) {
+    return selectedPicUnits.value.includes(unit.kode_unit);
+  }
+  return unit.tim_units.every(t =>
+    selectedPicUnits.value.includes(unit.kode_unit + '|' + t.nama_tim)
+  );
+}
+
+function isUnitPartiallyChecked(unit: Units): boolean {
+  if (!unit.tim_units || unit.tim_units.length === 0) return false;
+  return unit.tim_units.some(t =>
+    selectedPicUnits.value.includes(unit.kode_unit + '|' + t.nama_tim)
+  ) && !isUnitFullyChecked(unit);
+}
+
+function toggleUnitPic(unit: Units) {
+  const kodeUnit = unit.kode_unit;
+  if (!unit.tim_units || unit.tim_units.length === 0) {
+    // Unit tanpa tim: toggle biasa
+    const idx = selectedPicUnits.value.indexOf(kodeUnit);
+    if (idx >= 0) selectedPicUnits.value.splice(idx, 1);
+    else selectedPicUnits.value.push(kodeUnit);
+    return;
+  }
+  // Unit dengan tim: toggle SEMUA tim sekaligus
+  if (isUnitFullyChecked(unit)) {
+    selectedPicUnits.value = selectedPicUnits.value.filter(p => !p.startsWith(kodeUnit + '|'));
+  } else {
+    const others = selectedPicUnits.value.filter(p => !p.startsWith(kodeUnit + '|'));
+    selectedPicUnits.value = [...others, ...unit.tim_units.map(t => kodeUnit + '|' + t.nama_tim)];
+  }
+}
 
 // Konversi twOption → array untuk dikirim ke server
 function twOptionToArray(opt: string): number[] {
@@ -253,19 +307,26 @@ function loadIndicatorForEdit(unitName: string, timUnit: string, autoSelect = tr
 
     // Auto-select indikator pertama hanya jika autoSelect = true (unit dengan tim)
     if (autoSelect && response.data.length > 0) {
-      const firstIndikator = response.data[0];
-      editIndikatorId.value = firstIndikator.id;
-      const berlakuTw0 = firstIndikator.berlaku_tw ?? [1,2,3,4];
-      editTwOption.value = berlakuTw0.length === 4 ? 'all' : String(berlakuTw0[0]);
+      const i = response.data[0];
+      editIndikatorId.value = i.id;
       formEditInd.value = {
-        indikator: firstIndikator.indikator,
-        standar: firstIndikator.standar,
-        numerator: firstIndikator.numerator || '',
-        denominator: firstIndikator.denominator || '',
-        satuan: firstIndikator.satuan || 'persen',
-        satuan_waktu: firstIndikator.satuan_waktu || '',
+        indikator:        i.indikator,
+        standar_tw1:      i.standar_tw1 ?? i.standar ?? '',
+        satuan_tw1:       i.satuan_tw1 ?? i.satuan ?? 'persen',
+        satuan_waktu_tw1: i.satuan_waktu_tw1 ?? i.satuan_waktu ?? '',
+        standar_tw2:      i.standar_tw2 ?? i.standar ?? '',
+        satuan_tw2:       i.satuan_tw2 ?? i.satuan ?? 'persen',
+        satuan_waktu_tw2: i.satuan_waktu_tw2 ?? i.satuan_waktu ?? '',
+        standar_tw3:      i.standar_tw3 ?? i.standar ?? '',
+        satuan_tw3:       i.satuan_tw3 ?? i.satuan ?? 'persen',
+        satuan_waktu_tw3: i.satuan_waktu_tw3 ?? i.satuan_waktu ?? '',
+        standar_tw4:      i.standar_tw4 ?? i.standar ?? '',
+        satuan_tw4:       i.satuan_tw4 ?? i.satuan ?? 'persen',
+        satuan_waktu_tw4: i.satuan_waktu_tw4 ?? i.satuan_waktu ?? '',
+        numerator:        i.numerator || '',
+        denominator:      i.denominator || '',
       };
-      editJenisIndikator.value = firstIndikator.jenis_indikator || '';
+      editJenisIndikator.value = i.jenis_indikator || '';
     }
   })
   .catch(error => {
@@ -294,22 +355,27 @@ function openEditModal(unit: Units) {
 function onEditIndikatorChange(indikatorId: number | null) {
   if (!indikatorId) return;
   
-  const selected = editIndikatorList.value.find(ind => ind.id === indikatorId);
-  if (selected) {
-    console.log('Selected indikator:', selected);
-    editIndikatorId.value = selected.id;
-    const berlakuTwSel = selected.berlaku_tw ?? [1,2,3,4];
-    editTwOption.value = berlakuTwSel.length === 4 ? 'all' : String(berlakuTwSel[0]);
+  const s = editIndikatorList.value.find(ind => ind.id === indikatorId);
+  if (s) {
+    editIndikatorId.value = s.id;
     formEditInd.value = {
-      indikator: selected.indikator,
-      standar: selected.standar,
-      numerator: selected.numerator || '',
-      denominator: selected.denominator || '',
-      satuan: selected.satuan || 'persen',
-      satuan_waktu: selected.satuan_waktu || '',
+      indikator:        s.indikator,
+      standar_tw1:      s.standar_tw1 ?? s.standar ?? '',
+      satuan_tw1:       s.satuan_tw1 ?? s.satuan ?? 'persen',
+      satuan_waktu_tw1: s.satuan_waktu_tw1 ?? s.satuan_waktu ?? '',
+      standar_tw2:      s.standar_tw2 ?? s.standar ?? '',
+      satuan_tw2:       s.satuan_tw2 ?? s.satuan ?? 'persen',
+      satuan_waktu_tw2: s.satuan_waktu_tw2 ?? s.satuan_waktu ?? '',
+      standar_tw3:      s.standar_tw3 ?? s.standar ?? '',
+      satuan_tw3:       s.satuan_tw3 ?? s.satuan ?? 'persen',
+      satuan_waktu_tw3: s.satuan_waktu_tw3 ?? s.satuan_waktu ?? '',
+      standar_tw4:      s.standar_tw4 ?? s.standar ?? '',
+      satuan_tw4:       s.satuan_tw4 ?? s.satuan ?? 'persen',
+      satuan_waktu_tw4: s.satuan_waktu_tw4 ?? s.satuan_waktu ?? '',
+      numerator:        s.numerator || '',
+      denominator:      s.denominator || '',
     };
-    editJenisIndikator.value = selected.jenis_indikator || '';
-    console.log('formEditInd after change:', formEditInd.value);
+    editJenisIndikator.value = s.jenis_indikator || '';
   }
 }
 
@@ -320,8 +386,14 @@ function openAddIndicatorModal() {
   selectedTimUnit.value = '';
   selectedPicUnits.value = [];
   picUnitSearch.value = '';
-  formAddInd.value = { jenis_indikator: '', indikator: '', standar: '', satuan: 'persen', satuan_waktu: '', pic: '', numerator: '', denominator: '', berlaku_tw: [1,2,3,4] };
-  formAddTwOption.value = 'all';
+  formAddInd.value = {
+    jenis_indikator: '', indikator: '',
+    standar_tw1: '', satuan_tw1: 'persen', satuan_waktu_tw1: '',
+    standar_tw2: '', satuan_tw2: 'persen', satuan_waktu_tw2: '',
+    standar_tw3: '', satuan_tw3: 'persen', satuan_waktu_tw3: '',
+    standar_tw4: '', satuan_tw4: 'persen', satuan_waktu_tw4: '',
+    pic: '', numerator: '', denominator: '',
+  };
   showAddIndicator.value = true;
 }
 
@@ -341,14 +413,8 @@ function addIndicatorSave() {
   }
 
   // Validasi: Semua field wajib diisi
-  if (!f.indikator || !f.standar || !f.satuan || !f.numerator || !f.denominator) {
-    alert('Lengkapi semua kolom wajib (Indikator, Standar, Satuan, Numerator, Denominator).');
-    return;
-  }
-
-  // Validasi: Jika satuan = rata-rata, satuan_waktu wajib diisi
-  if (f.satuan === 'rata-rata' && !f.satuan_waktu) {
-    alert('Satuan waktu harus diisi untuk satuan rata-rata.');
+  if (!f.indikator || !f.numerator || !f.denominator) {
+    alert('Lengkapi semua kolom wajib (Indikator, Numerator, Denominator).');
     return;
   }
 
@@ -358,37 +424,31 @@ function addIndicatorSave() {
     return;
   }
 
-  console.log('Data yang akan dikirim:', {
-    jenis_indikator: f.jenis_indikator,
-    kode_unit: null, // Tidak terikat ke satu unit
-    tim_unit: null,
-    indikator: f.indikator,
-    standar: f.standar,
-    satuan: f.satuan,
-    satuan_waktu: f.satuan_waktu,
-    pic: null, // Tidak menggunakan pic string lagi
-    pic_units: selectedPicUnits.value, // Array of unit codes
-    numerator: f.numerator,
-    denominator: f.denominator,
-  });
-
   // Set submitting flag
   isSubmitting.value = true;
 
   // Simpan ke database via Inertia
   router.post('/indikator', {
-    jenis_indikator: f.jenis_indikator,
-    kode_unit: null,
-    tim_unit: null,
-    indikator: f.indikator,
-    standar: f.standar,
-    satuan: f.satuan,
-    satuan_waktu: f.satuan_waktu,
-    pic: null,
-    pic_units: selectedPicUnits.value,
-    numerator: f.numerator,
-    denominator: f.denominator,
-    berlaku_tw: twOptionToArray(formAddTwOption.value),
+    jenis_indikator:   f.jenis_indikator,
+    kode_unit:         null,
+    tim_unit:          null,
+    indikator:         f.indikator,
+    standar_tw1:       f.standar_tw1,
+    satuan_tw1:        f.satuan_tw1,
+    satuan_waktu_tw1:  f.satuan_tw1 === 'rata-rata' ? f.satuan_waktu_tw1 : null,
+    standar_tw2:       f.standar_tw2,
+    satuan_tw2:        f.satuan_tw2,
+    satuan_waktu_tw2:  f.satuan_tw2 === 'rata-rata' ? f.satuan_waktu_tw2 : null,
+    standar_tw3:       f.standar_tw3,
+    satuan_tw3:        f.satuan_tw3,
+    satuan_waktu_tw3:  f.satuan_tw3 === 'rata-rata' ? f.satuan_waktu_tw3 : null,
+    standar_tw4:       f.standar_tw4,
+    satuan_tw4:        f.satuan_tw4,
+    satuan_waktu_tw4:  f.satuan_tw4 === 'rata-rata' ? f.satuan_waktu_tw4 : null,
+    pic:               null,
+    pic_units:         selectedPicUnits.value,
+    numerator:         f.numerator,
+    denominator:       f.denominator,
   }, {
     preserveScroll: true,
     onSuccess: (page) => {
@@ -398,8 +458,14 @@ function addIndicatorSave() {
       hasDraft.value = false
       showAddIndicator.value = false;
       // Reset form
-      formAddInd.value = { jenis_indikator: '', indikator: '', standar: '', satuan: 'persen', satuan_waktu: '', pic: '', numerator: '', denominator: '', berlaku_tw: [1,2,3,4] };
-      formAddTwOption.value = 'all';
+      formAddInd.value = {
+        jenis_indikator: '', indikator: '',
+        standar_tw1: '', satuan_tw1: 'persen', satuan_waktu_tw1: '',
+        standar_tw2: '', satuan_tw2: 'persen', satuan_waktu_tw2: '',
+        standar_tw3: '', satuan_tw3: 'persen', satuan_waktu_tw3: '',
+        standar_tw4: '', satuan_tw4: 'persen', satuan_waktu_tw4: '',
+        pic: '', numerator: '', denominator: '',
+      };
       selectedPicUnits.value = [];
       picUnitSearch.value = '';
       // Reload indicator list if view modal open
@@ -455,23 +521,27 @@ function editSave() {
   console.log('numerator:', f.numerator);
   console.log('denominator:', f.denominator);
   
-  if (!f.indikator || !f.standar || !f.numerator || !f.denominator) {
+  if (!f.indikator || !f.numerator || !f.denominator) {
     alert('Semua field harus diisi (kecuali PIC)');
-    return;
-  }
-  if (f.satuan === 'rata-rata' && !f.satuan_waktu) {
-    alert('Satuan waktu harus diisi untuk satuan rata-rata.');
     return;
   }
 
   const dataToSend = {
-    indikator: f.indikator,
-    standar: f.standar,
-    numerator: f.numerator,
-    denominator: f.denominator,
-    satuan: f.satuan,
-    satuan_waktu: f.satuan === 'rata-rata' ? f.satuan_waktu : null,
-    berlaku_tw: twOptionToArray(editTwOption.value),
+    indikator:        f.indikator,
+    numerator:        f.numerator,
+    denominator:      f.denominator,
+    standar_tw1:      f.standar_tw1,
+    satuan_tw1:       f.satuan_tw1,
+    satuan_waktu_tw1: f.satuan_tw1 === 'rata-rata' ? f.satuan_waktu_tw1 : null,
+    standar_tw2:      f.standar_tw2,
+    satuan_tw2:       f.satuan_tw2,
+    satuan_waktu_tw2: f.satuan_tw2 === 'rata-rata' ? f.satuan_waktu_tw2 : null,
+    standar_tw3:      f.standar_tw3,
+    satuan_tw3:       f.satuan_tw3,
+    satuan_waktu_tw3: f.satuan_tw3 === 'rata-rata' ? f.satuan_waktu_tw3 : null,
+    standar_tw4:      f.standar_tw4,
+    satuan_tw4:       f.satuan_tw4,
+    satuan_waktu_tw4: f.satuan_tw4 === 'rata-rata' ? f.satuan_waktu_tw4 : null,
   };
 
   console.log('Data yang akan dikirim:', dataToSend);
@@ -536,8 +606,14 @@ const rekapPerPage = 10;
 /* ====== REKAP EDIT MODAL ====== */
 const showRekapEdit = ref(false);
 const rekapEditItem = ref<any>(null);
-const rekapEditForm = ref({ indikator: '', standar: '', numerator: '', denominator: '', satuan: 'persen', satuan_waktu: '' });
-const rekapEditTwOption = ref<string>('all');
+const rekapEditForm = ref({
+  indikator: '',
+  standar_tw1: '', satuan_tw1: 'persen', satuan_waktu_tw1: '',
+  standar_tw2: '', satuan_tw2: 'persen', satuan_waktu_tw2: '',
+  standar_tw3: '', satuan_tw3: 'persen', satuan_waktu_tw3: '',
+  standar_tw4: '', satuan_tw4: 'persen', satuan_waktu_tw4: '',
+  numerator: '', denominator: '',
+});
 const rekapEditSaving = ref(false);
 const rekapEditSelectedUnits = ref<string[]>([]); // Multi-select PIC units untuk edit
 const rekapEditPicSearch = ref(''); // Search untuk PIC checkbox dalam edit modal
@@ -692,16 +768,30 @@ function twArrayToOption(arr: number[]): string {
   return String(arr[0]);
 }
 
+function isIndAktifForTw(ind: any, tw: number): boolean {
+  const standar = ind[`standar_tw${tw}`];
+  if (standar === null || standar === undefined || standar === '') return true; // backward compat
+  return standar !== '0';
+}
+
 function openRekapEdit(ind: any) {
   rekapEditItem.value = ind;
-  rekapEditTwOption.value = twArrayToOption(ind.berlaku_tw ?? [1,2,3,4]);
   rekapEditForm.value = {
-    indikator:    ind.indikator ?? '',
-    standar:      String(ind.standar ?? ''),
-    numerator:    ind.numerator ?? '',
-    denominator:  ind.denominator ?? '',
-    satuan:       ind.satuan ?? 'persen',
-    satuan_waktu: ind.satuan_waktu ?? '',
+    indikator:        ind.indikator ?? '',
+    standar_tw1:      ind.standar_tw1 ?? ind.standar ?? '',
+    satuan_tw1:       ind.satuan_tw1 ?? ind.satuan ?? 'persen',
+    satuan_waktu_tw1: ind.satuan_waktu_tw1 ?? ind.satuan_waktu ?? '',
+    standar_tw2:      ind.standar_tw2 ?? ind.standar ?? '',
+    satuan_tw2:       ind.satuan_tw2 ?? ind.satuan ?? 'persen',
+    satuan_waktu_tw2: ind.satuan_waktu_tw2 ?? ind.satuan_waktu ?? '',
+    standar_tw3:      ind.standar_tw3 ?? ind.standar ?? '',
+    satuan_tw3:       ind.satuan_tw3 ?? ind.satuan ?? 'persen',
+    satuan_waktu_tw3: ind.satuan_waktu_tw3 ?? ind.satuan_waktu ?? '',
+    standar_tw4:      ind.standar_tw4 ?? ind.standar ?? '',
+    satuan_tw4:       ind.satuan_tw4 ?? ind.satuan ?? 'persen',
+    satuan_waktu_tw4: ind.satuan_waktu_tw4 ?? ind.satuan_waktu ?? '',
+    numerator:        ind.numerator ?? '',
+    denominator:      ind.denominator ?? '',
   };
   // Pre-select current units from the grouped units array
   rekapEditSelectedUnits.value = (ind.units ?? []).map((u: any) =>
@@ -713,12 +803,8 @@ function openRekapEdit(ind: any) {
 
 async function rekapEditSave() {
   const f = rekapEditForm.value;
-  if (!f.indikator || !f.standar || !f.numerator || !f.denominator) {
+  if (!f.indikator || !f.numerator || !f.denominator) {
     alert('Semua field harus diisi');
-    return;
-  }
-  if (f.satuan === 'rata-rata' && !f.satuan_waktu) {
-    alert('Satuan waktu harus diisi untuk satuan rata-rata');
     return;
   }
   if (rekapEditSelectedUnits.value.length === 0) {
@@ -731,12 +817,20 @@ async function rekapEditSave() {
       original_indikator: rekapEditItem.value.indikator,
       jenis_indikator:    rekapEditItem.value.jenis_indikator,
       indikator:          f.indikator,
-      standar:            f.standar,
       numerator:          f.numerator,
       denominator:        f.denominator,
-      satuan:             f.satuan,
-      satuan_waktu:       f.satuan === 'rata-rata' ? f.satuan_waktu : null,
-      berlaku_tw:         twOptionToArray(rekapEditTwOption.value),
+      standar_tw1:        f.standar_tw1,
+      satuan_tw1:         f.satuan_tw1,
+      satuan_waktu_tw1:   f.satuan_tw1 === 'rata-rata' ? f.satuan_waktu_tw1 : null,
+      standar_tw2:        f.standar_tw2,
+      satuan_tw2:         f.satuan_tw2,
+      satuan_waktu_tw2:   f.satuan_tw2 === 'rata-rata' ? f.satuan_waktu_tw2 : null,
+      standar_tw3:        f.standar_tw3,
+      satuan_tw3:         f.satuan_tw3,
+      satuan_waktu_tw3:   f.satuan_tw3 === 'rata-rata' ? f.satuan_waktu_tw3 : null,
+      standar_tw4:        f.standar_tw4,
+      satuan_tw4:         f.satuan_tw4,
+      satuan_waktu_tw4:   f.satuan_tw4 === 'rata-rata' ? f.satuan_waktu_tw4 : null,
       pic_units:          rekapEditSelectedUnits.value,
     });
     alert('Indikator berhasil diupdate!');
@@ -1065,8 +1159,9 @@ onUnmounted(_unregisterAutoSave)
                       <input
                         type="checkbox"
                         :id="'unit-' + unit.kode_unit"
-                        :value="unit.kode_unit"
-                        v-model="selectedPicUnits"
+                        :checked="isUnitFullyChecked(unit)"
+                        :indeterminate.prop="isUnitPartiallyChecked(unit)"
+                        @change="toggleUnitPic(unit)"
                         class="mr-2 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                       />
                       <label :for="'unit-' + unit.kode_unit" class="text-sm font-medium dark:text-gray-200 cursor-pointer">
@@ -1074,7 +1169,7 @@ onUnmounted(_unregisterAutoSave)
                       </label>
                     </div>
 
-                    <!-- Tim Units (nested, jika ada) -->
+                    <!-- Tim Units (nested, jika ada) — disabled & auto-checked saat parent dicentang -->
                     <div v-if="unit.tim_units && unit.tim_units.length > 0" class="ml-6 mt-1 space-y-1">
                       <div v-for="tim in unit.tim_units" :key="tim.id" class="flex items-center">
                         <input
@@ -1082,9 +1177,13 @@ onUnmounted(_unregisterAutoSave)
                           :id="'tim-' + unit.kode_unit + '-' + tim.id"
                           :value="unit.kode_unit + '|' + tim.nama_tim"
                           v-model="selectedPicUnits"
-                          class="mr-2 h-3.5 w-3.5 rounded border-gray-300 text-indigo-500 focus:ring-indigo-400"
+                          :disabled="isUnitFullyChecked(unit)"
+                          class="mr-2 h-3.5 w-3.5 rounded border-gray-300 text-indigo-500 focus:ring-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed"
                         />
-                        <label :for="'tim-' + unit.kode_unit + '-' + tim.id" class="text-xs text-gray-600 dark:text-gray-400 cursor-pointer">
+                        <label
+                          :for="'tim-' + unit.kode_unit + '-' + tim.id"
+                          :class="isUnitFullyChecked(unit) ? 'text-xs text-gray-400 dark:text-gray-500 cursor-not-allowed' : 'text-xs text-gray-600 dark:text-gray-400 cursor-pointer'"
+                        >
                           {{ tim.nama_tim }}
                         </label>
                       </div>
@@ -1108,64 +1207,62 @@ onUnmounted(_unregisterAutoSave)
                 ></textarea>
               </label>
 
-              <!-- Standar, Satuan, (Satuan Waktu jika rata-rata), Berlaku TW — 1 baris -->
+              <!-- Standar & Satuan per Triwulan -->
               <div class="block text-sm md:col-span-2">
-                <div :class="['grid grid-cols-1 gap-4', formAddInd.satuan === 'rata-rata' ? 'md:grid-cols-4' : 'md:grid-cols-3']">
-                  <!-- Standar -->
-                  <label class="block">
-                    <span class="mb-1 block font-medium dark:text-gray-200">Standar <span class="text-red-500">*</span></span>
-                    <input
-                      v-model="formAddInd.standar"
-                      type="text"
-                      class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                      placeholder="cth: ≥ 90%"
-                    />
-                  </label>
-
-                  <!-- Satuan -->
-                  <label class="block">
-                    <span class="mb-1 block font-medium dark:text-gray-200">Satuan <span class="text-red-500">*</span></span>
-                    <select
-                      v-model="formAddInd.satuan"
-                      class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                    >
-                      <option value="persen">Persen (%)</option>
-                      <option value="permil">Permil (‰)</option>
-                      <option value="rata-rata">Rata-rata</option>
-                      <option value="kejadian">Kejadian</option>
-                      <option value="peserta">Peserta</option>
-                      <option value="dokumen">Dokumen/Laporan</option>
+                <span class="mb-1 block font-medium dark:text-gray-200">Standar &amp; Satuan per Triwulan</span>
+                <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">Isi standar <code class="rounded bg-gray-100 px-1 dark:bg-gray-700">0</code> jika indikator tidak berlaku pada TW tersebut.</p>
+                <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-600">
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                    <span>TW</span><span>Standar</span><span>Satuan</span><span>Sat. Waktu</span>
+                  </div>
+                  <!-- TW1 -->
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                    <span class="text-xs font-semibold text-indigo-600 dark:text-indigo-400">TW 1</span>
+                    <input v-model="formAddInd.standar_tw1" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="formAddInd.satuan_tw1" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
                     </select>
-                  </label>
-
-                  <!-- Satuan Waktu (hanya muncul jika satuan = rata-rata) -->
-                  <label v-if="formAddInd.satuan === 'rata-rata'" class="block">
-                    <span class="mb-1 block font-medium dark:text-gray-200">Satuan Waktu <span class="text-red-500">*</span></span>
-                    <select
-                      v-model="formAddInd.satuan_waktu"
-                      class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                    >
-                      <option value="">Pilih satuan waktu...</option>
-                      <option value="hari">Hari</option>
-                      <option value="jam">Jam</option>
-                      <option value="menit">Menit</option>
+                    <select v-if="formAddInd.satuan_tw1 === 'rata-rata'" v-model="formAddInd.satuan_waktu_tw1" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
                     </select>
-                  </label>
-
-                  <!-- Berlaku di TW (selalu tampil, posisi terakhir) -->
-                  <label class="block">
-                    <span class="mb-1 block font-medium dark:text-gray-200">Berlaku di TW <span class="text-red-500">*</span></span>
-                    <select
-                      v-model="formAddTwOption"
-                      class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                    >
-                      <option value="all">Semua TW</option>
-                      <option value="1">TW 1</option>
-                      <option value="2">TW 2</option>
-                      <option value="3">TW 3</option>
-                      <option value="4">TW 4</option>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
+                  <!-- TW2 -->
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                    <span class="text-xs font-semibold text-indigo-600 dark:text-indigo-400">TW 2</span>
+                    <input v-model="formAddInd.standar_tw2" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="formAddInd.satuan_tw2" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
                     </select>
-                  </label>
+                    <select v-if="formAddInd.satuan_tw2 === 'rata-rata'" v-model="formAddInd.satuan_waktu_tw2" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
+                  <!-- TW3 -->
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                    <span class="text-xs font-semibold text-indigo-600 dark:text-indigo-400">TW 3</span>
+                    <input v-model="formAddInd.standar_tw3" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="formAddInd.satuan_tw3" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                    </select>
+                    <select v-if="formAddInd.satuan_tw3 === 'rata-rata'" v-model="formAddInd.satuan_waktu_tw3" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
+                  <!-- TW4 -->
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 px-3 py-2">
+                    <span class="text-xs font-semibold text-indigo-600 dark:text-indigo-400">TW 4</span>
+                    <input v-model="formAddInd.standar_tw4" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 focus:ring-1 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="formAddInd.satuan_tw4" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                    </select>
+                    <select v-if="formAddInd.satuan_tw4 === 'rata-rata'" v-model="formAddInd.satuan_waktu_tw4" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-indigo-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
                 </div>
               </div>
 
@@ -1270,21 +1367,28 @@ onUnmounted(_unregisterAutoSave)
               <div class="overflow-x-auto border border-gray-200 dark:border-gray-700 rounded-lg">
                 <table class="w-full text-sm">
                   <thead class="bg-gray-50 dark:bg-gray-800">
+  <!-- Baris 1: header utama -->
   <tr>
-    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">No</th>
-    <th class="px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Jenis</th>
-    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Indikator</th>
-    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Standar</th>
-    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">PIC</th>
-    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Numerator</th>
-    <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Denominator</th>
-    <th class="px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Aksi</th>
+    <th rowspan="2" class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b border-r dark:border-gray-700 align-middle">No</th>
+    <th rowspan="2" class="px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-200 border-b border-r dark:border-gray-700 align-middle">Jenis</th>
+    <th rowspan="2" class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b border-r dark:border-gray-700 align-middle">Indikator</th>
+    <th colspan="4" class="px-4 py-2 text-center font-semibold text-gray-700 dark:text-gray-200 border-b border-r dark:border-gray-700">Standar</th>
+    <th rowspan="2" class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b border-r dark:border-gray-700 align-middle">Numerator</th>
+    <th rowspan="2" class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b border-r dark:border-gray-700 align-middle">Denominator</th>
+    <th rowspan="2" class="px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700 align-middle">Aksi</th>
+  </tr>
+  <!-- Baris 2: sub-header TW -->
+  <tr>
+    <th class="px-3 py-1.5 text-center text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 border-b border-r dark:border-gray-700 bg-indigo-50 dark:bg-indigo-900/20">TW1</th>
+    <th class="px-3 py-1.5 text-center text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 border-b border-r dark:border-gray-700 bg-indigo-50 dark:bg-indigo-900/20">TW2</th>
+    <th class="px-3 py-1.5 text-center text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 border-b border-r dark:border-gray-700 bg-indigo-50 dark:bg-indigo-900/20">TW3</th>
+    <th class="px-3 py-1.5 text-center text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 border-b border-r dark:border-gray-700 bg-indigo-50 dark:bg-indigo-900/20">TW4</th>
   </tr>
 </thead>
 <tbody class="divide-y divide-gray-200 dark:divide-gray-700">
   <tr v-for="(item, index) in viewIndikatorList" :key="item.id" class="hover:bg-gray-50 dark:hover:bg-gray-800">
-    <td class="px-4 py-3 text-gray-900 dark:text-gray-100">{{ index + 1 }}</td>
-    <td class="px-4 py-3 text-center">
+    <td class="px-4 py-3 text-gray-900 dark:text-gray-100 border-r dark:border-gray-700">{{ index + 1 }}</td>
+    <td class="px-4 py-3 text-center border-r dark:border-gray-700">
       <span class="inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold whitespace-nowrap"
         :class="{
           'bg-blue-100 text-blue-700': item.jenis_indikator === 'INM',
@@ -1297,18 +1401,21 @@ onUnmounted(_unregisterAutoSave)
         {{ item.jenis_indikator === 'IMUT_RS' ? 'IMUT RS' : item.jenis_indikator === 'IMUT_UNIT' ? 'IMUT UNIT' : item.jenis_indikator }}
       </span>
     </td>
-    <td class="px-4 py-3 text-gray-900 dark:text-gray-100">
+    <td class="px-4 py-3 text-gray-900 dark:text-gray-100 border-r dark:border-gray-700">
       <div class="max-w-md">{{ item.indikator }}</div>
     </td>
-    <td class="px-4 py-3 text-gray-900 dark:text-gray-100">{{ item.standar }}</td>
-    <td class="px-4 py-3 text-gray-900 dark:text-gray-100">
-      <!-- Tampilkan hanya PIC yang relevan dengan unit/tim yang sedang dilihat -->
-      {{ getRelevantPicForView(item) }}
+    <!-- 4 kolom TW standar terpisah -->
+    <td v-for="tw in [1,2,3,4]" :key="tw"
+      class="px-3 py-3 text-center text-sm border-r dark:border-gray-700"
+      :class="isIndAktifForTw(item, tw) ? 'text-gray-800 dark:text-gray-200' : 'text-gray-300 dark:text-gray-600 bg-gray-50 dark:bg-gray-800/50'"
+    >
+      <span v-if="isIndAktifForTw(item, tw)">{{ item[`standar_tw${tw}`] || item.standar || '-' }}</span>
+      <span v-else class="italic text-[10px]">n/a</span>
     </td>
-    <td class="px-4 py-3 text-gray-900 dark:text-gray-100">
+    <td class="px-4 py-3 text-gray-900 dark:text-gray-100 border-r dark:border-gray-700">
       <div class="max-w-xs">{{ item.numerator }}</div>
     </td>
-    <td class="px-4 py-3 text-gray-900 dark:text-gray-100">
+    <td class="px-4 py-3 text-gray-900 dark:text-gray-100 border-r dark:border-gray-700">
       <div class="max-w-xs">{{ item.denominator }}</div>
     </td>
     <td class="px-4 py-3 text-center">
@@ -1436,64 +1543,58 @@ onUnmounted(_unregisterAutoSave)
                   ></textarea>
                 </label>
 
-                <!-- Standar, Satuan, (Satuan Waktu), Berlaku TW — 1 baris -->
+                <!-- Standar & Satuan per Triwulan -->
                 <div class="block text-sm md:col-span-2">
-                  <div :class="['grid grid-cols-1 gap-4', formEditInd.satuan === 'rata-rata' ? 'md:grid-cols-4' : 'md:grid-cols-3']">
-                    <!-- Standar -->
-                    <label class="block">
-                      <span class="mb-1 block font-medium dark:text-gray-200">Standar <span class="text-amber-600">*</span></span>
-                      <input
-                        v-model="formEditInd.standar"
-                        type="text"
-                        class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                        placeholder="cth: ≥ 90%"
-                      />
-                    </label>
-
-                    <!-- Satuan -->
-                    <label class="block">
-                      <span class="mb-1 block font-medium dark:text-gray-200">Satuan <span class="text-amber-600">*</span></span>
-                      <select
-                        v-model="formEditInd.satuan"
-                        class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                      >
-                        <option value="persen">Persen (%)</option>
-                        <option value="permil">Permil (‰)</option>
-                        <option value="rata-rata">Rata-rata</option>
-                        <option value="kejadian">Kejadian</option>
-                        <option value="peserta">Peserta</option>
-                        <option value="dokumen">Dokumen/Laporan</option>
+                  <span class="mb-1 block font-medium dark:text-gray-200">Standar &amp; Satuan per Triwulan</span>
+                  <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">Isi standar <code class="rounded bg-gray-100 px-1 dark:bg-gray-700">0</code> jika indikator tidak berlaku pada TW tersebut.</p>
+                  <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-600">
+                    <div class="grid grid-cols-[3rem_1fr_1fr_1fr] border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                      <span>TW</span><span>Standar</span><span>Satuan</span><span>Sat. Waktu</span>
+                    </div>
+                    <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                      <span class="text-xs font-semibold text-amber-600 dark:text-amber-400">TW 1</span>
+                      <input v-model="formEditInd.standar_tw1" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                      <select v-model="formEditInd.satuan_tw1" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
                       </select>
-                    </label>
-
-                    <!-- Satuan Waktu (hanya jika rata-rata) -->
-                    <label v-if="formEditInd.satuan === 'rata-rata'" class="block">
-                      <span class="mb-1 block font-medium dark:text-gray-200">Satuan Waktu <span class="text-amber-600">*</span></span>
-                      <select
-                        v-model="formEditInd.satuan_waktu"
-                        class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                      >
-                        <option value="">Pilih satuan waktu...</option>
-                        <option value="hari">Hari</option>
-                        <option value="jam">Jam</option>
-                        <option value="menit">Menit</option>
+                      <select v-if="formEditInd.satuan_tw1 === 'rata-rata'" v-model="formEditInd.satuan_waktu_tw1" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
                       </select>
-                    </label>
-
-                    <!-- Berlaku di TW -->
-                    <label class="block">
-                      <span class="mb-1 block font-medium dark:text-gray-200">Berlaku di TW <span class="text-amber-600">*</span></span>
-                      <select
-                        v-model="editTwOption"
-                        class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
-                      >
-                        <option value="all">Semua TW</option>
-                        <option value="1">TW 1</option>
-                        <option value="2">TW 2</option>
-                        <option value="3">TW 3</option>
-                        <option value="4">TW 4</option>
+                      <span v-else class="text-xs text-gray-400">-</span>
+                    </div>
+                    <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                      <span class="text-xs font-semibold text-amber-600 dark:text-amber-400">TW 2</span>
+                      <input v-model="formEditInd.standar_tw2" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                      <select v-model="formEditInd.satuan_tw2" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
                       </select>
-                    </label>
+                      <select v-if="formEditInd.satuan_tw2 === 'rata-rata'" v-model="formEditInd.satuan_waktu_tw2" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                      </select>
+                      <span v-else class="text-xs text-gray-400">-</span>
+                    </div>
+                    <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                      <span class="text-xs font-semibold text-amber-600 dark:text-amber-400">TW 3</span>
+                      <input v-model="formEditInd.standar_tw3" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                      <select v-model="formEditInd.satuan_tw3" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                      </select>
+                      <select v-if="formEditInd.satuan_tw3 === 'rata-rata'" v-model="formEditInd.satuan_waktu_tw3" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                      </select>
+                      <span v-else class="text-xs text-gray-400">-</span>
+                    </div>
+                    <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 px-3 py-2">
+                      <span class="text-xs font-semibold text-amber-600 dark:text-amber-400">TW 4</span>
+                      <input v-model="formEditInd.standar_tw4" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                      <select v-model="formEditInd.satuan_tw4" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                      </select>
+                      <select v-if="formEditInd.satuan_tw4 === 'rata-rata'" v-model="formEditInd.satuan_waktu_tw4" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-amber-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                        <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                      </select>
+                      <span v-else class="text-xs text-gray-400">-</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1642,9 +1743,9 @@ onUnmounted(_unregisterAutoSave)
                     <th class="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700">Judul Indikator</th>
                     <th class="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-52">Numerator</th>
                     <th class="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-52">Denominator</th>
-                    <th class="border border-gray-200 px-3 py-2.5 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-20">Standar</th>
-                    <th class="border border-gray-200 px-3 py-2.5 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-20">Satuan</th>
-                    <th class="border border-gray-200 px-3 py-2.5 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-24">Berlaku TW</th>
+                    <th class="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-24">Standar / TW</th>
+                    <th class="border border-gray-200 px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-28">Satuan / TW</th>
+                    <th class="border border-gray-200 px-3 py-2.5 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-24">Status TW</th>
                     <th class="border border-gray-200 px-3 py-2.5 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-20">Status</th>
                     <th class="border border-gray-200 px-3 py-2.5 text-center text-xs font-semibold text-gray-600 dark:text-gray-300 dark:border-gray-700 w-20">Aksi</th>
                   </tr>
@@ -1706,15 +1807,37 @@ onUnmounted(_unregisterAutoSave)
                     <td class="border border-gray-200 px-3 py-2 dark:border-gray-700">
                       <p class="text-xs text-gray-600 dark:text-gray-400 leading-snug line-clamp-3">{{ ind.denominator || '-' }}</p>
                     </td>
-                    <td class="border border-gray-200 px-3 py-2 text-center text-xs font-medium text-gray-700 dark:text-gray-300 dark:border-gray-700">{{ ind.standar }}</td>
-                    <td class="border border-gray-200 px-3 py-2 text-center text-xs text-gray-600 dark:text-gray-400 dark:border-gray-700 capitalize">
-                      {{ ind.satuan }}{{ ind.satuan_waktu ? ' / ' + ind.satuan_waktu : '' }}
+                    <td class="border border-gray-200 px-3 py-2 dark:border-gray-700">
+                      <div class="space-y-0.5">
+                        <div v-for="tw in [1,2,3,4]" :key="tw" class="flex items-center gap-1">
+                          <span class="w-6 text-[10px] font-semibold"
+                            :class="isIndAktifForTw(ind, tw) ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-300'"
+                          >TW{{ tw }}</span>
+                          <span v-if="isIndAktifForTw(ind, tw)" class="text-xs text-gray-700 dark:text-gray-300">
+                            {{ ind[`standar_tw${tw}`] || ind.standar || '-' }}
+                          </span>
+                          <span v-else class="text-[10px] text-gray-400 italic">tidak aktif</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td class="border border-gray-200 px-3 py-2 dark:border-gray-700">
+                      <div class="space-y-0.5">
+                        <div v-for="tw in [1,2,3,4]" :key="tw" class="flex items-center gap-1">
+                          <span class="w-6 text-[10px] font-semibold"
+                            :class="isIndAktifForTw(ind, tw) ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-300'"
+                          >TW{{ tw }}</span>
+                          <span v-if="isIndAktifForTw(ind, tw)" class="text-xs text-gray-600 dark:text-gray-400 capitalize">
+                            {{ ind[`satuan_tw${tw}`] || ind.satuan || '-' }}{{ (ind[`satuan_tw${tw}`] || ind.satuan) === 'rata-rata' && (ind[`satuan_waktu_tw${tw}`] || ind.satuan_waktu) ? ' / ' + (ind[`satuan_waktu_tw${tw}`] || ind.satuan_waktu) : '' }}
+                          </span>
+                          <span v-else class="text-[10px] text-gray-400">-</span>
+                        </div>
+                      </div>
                     </td>
                     <td class="border border-gray-200 px-3 py-2 text-center dark:border-gray-700">
                       <div class="flex flex-wrap justify-center gap-0.5">
                         <span v-for="tw in ([1,2,3,4] as number[])" :key="tw"
                           class="inline-block rounded px-1 py-0.5 text-[10px] font-semibold"
-                          :class="(ind.berlaku_tw ?? [1,2,3,4]).includes(tw) ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-300'"
+                          :class="isIndAktifForTw(ind, tw) ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-300'"
                         >TW{{ tw }}</span>
                       </div>
                     </td>
@@ -1857,41 +1980,58 @@ onUnmounted(_unregisterAutoSave)
                 <textarea v-model="rekapEditForm.indikator" rows="3" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="Deskripsi indikator..."></textarea>
               </div>
 
-              <!-- Standar, Satuan, Satuan Waktu, Berlaku TW -->
-              <div :class="['grid grid-cols-1 gap-3', rekapEditForm.satuan === 'rata-rata' ? 'md:grid-cols-4' : 'md:grid-cols-3']">
-                <div>
-                  <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Standar <span class="text-red-500">*</span></label>
-                  <input v-model="rekapEditForm.standar" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="cth: ≥ 90%" />
-                </div>
-                <div>
-                  <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Satuan <span class="text-red-500">*</span></label>
-                  <select v-model="rekapEditForm.satuan" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                    <option value="persen">Persen (%)</option>
-                    <option value="permil">Permil (‰)</option>
-                    <option value="rata-rata">Rata-rata</option>
-                    <option value="kejadian">Kejadian</option>
-                    <option value="peserta">Peserta</option>
-                    <option value="dokumen">Dokumen/Laporan</option>
-                  </select>
-                </div>
-                <div v-if="rekapEditForm.satuan === 'rata-rata'">
-                  <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Satuan Waktu <span class="text-red-500">*</span></label>
-                  <select v-model="rekapEditForm.satuan_waktu" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                    <option value="">Pilih satuan waktu...</option>
-                    <option value="hari">Hari</option>
-                    <option value="jam">Jam</option>
-                    <option value="menit">Menit</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Berlaku Triwulan</label>
-                  <select v-model="rekapEditTwOption" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-teal-500 focus:ring-2 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                    <option value="all">Semua TW</option>
-                    <option value="1">TW 1</option>
-                    <option value="2">TW 2</option>
-                    <option value="3">TW 3</option>
-                    <option value="4">TW 4</option>
-                  </select>
+              <!-- Standar & Satuan per Triwulan -->
+              <div>
+                <label class="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Standar &amp; Satuan per Triwulan</label>
+                <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">Isi standar <code class="rounded bg-gray-100 px-1 dark:bg-gray-700">0</code> jika indikator tidak berlaku pada TW tersebut.</p>
+                <div class="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-600">
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] border-b border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                    <span>TW</span><span>Standar</span><span>Satuan</span><span>Sat. Waktu</span>
+                  </div>
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                    <span class="text-xs font-semibold text-teal-600 dark:text-teal-400">TW 1</span>
+                    <input v-model="rekapEditForm.standar_tw1" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="rekapEditForm.satuan_tw1" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                    </select>
+                    <select v-if="rekapEditForm.satuan_tw1 === 'rata-rata'" v-model="rekapEditForm.satuan_waktu_tw1" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                    <span class="text-xs font-semibold text-teal-600 dark:text-teal-400">TW 2</span>
+                    <input v-model="rekapEditForm.standar_tw2" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="rekapEditForm.satuan_tw2" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                    </select>
+                    <select v-if="rekapEditForm.satuan_tw2 === 'rata-rata'" v-model="rekapEditForm.satuan_waktu_tw2" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-700">
+                    <span class="text-xs font-semibold text-teal-600 dark:text-teal-400">TW 3</span>
+                    <input v-model="rekapEditForm.standar_tw3" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="rekapEditForm.satuan_tw3" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                    </select>
+                    <select v-if="rekapEditForm.satuan_tw3 === 'rata-rata'" v-model="rekapEditForm.satuan_waktu_tw3" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
+                  <div class="grid grid-cols-[3rem_1fr_1fr_1fr] items-center gap-2 px-3 py-2">
+                    <span class="text-xs font-semibold text-teal-600 dark:text-teal-400">TW 4</span>
+                    <input v-model="rekapEditForm.standar_tw4" type="text" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" placeholder="≥ 90%" />
+                    <select v-model="rekapEditForm.satuan_tw4" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="persen">Persen (%)</option><option value="permil">Permil (‰)</option><option value="rata-rata">Rata-rata</option><option value="kejadian">Kejadian</option><option value="peserta">Peserta</option><option value="dokumen">Dokumen</option>
+                    </select>
+                    <select v-if="rekapEditForm.satuan_tw4 === 'rata-rata'" v-model="rekapEditForm.satuan_waktu_tw4" class="w-full rounded border border-gray-300 px-2 py-1 text-sm focus:border-teal-500 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                      <option value="">Pilih...</option><option value="hari">Hari</option><option value="jam">Jam</option><option value="menit">Menit</option>
+                    </select>
+                    <span v-else class="text-xs text-gray-400">-</span>
+                  </div>
                 </div>
               </div>
 

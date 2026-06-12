@@ -35,15 +35,16 @@ class PegawaiController extends Controller
         }
 
         $request->validate([
-            'name'           => 'required|string|max:255',
-            'nip'            => 'nullable|string|max:30|unique:users,nip',
-            'password'       => 'required|string|min:6',
-            'base_role'      => 'required|in:admin_mutu,kepala_unit,staf',
-            'status_pegawai' => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
-            'status_kerja'   => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
-            'kode_unit'      => 'nullable|exists:units,kode_unit',
-            'is_pj_data'     => 'nullable|boolean',
-            'pj_data_tim'    => 'nullable|string|max:200',
+            'name'                 => 'required|string|max:255',
+            'nip'                  => 'nullable|string|max:30|unique:users,nip',
+            'password'             => 'required|string|min:6',
+            'base_role'            => 'required|in:admin_mutu,kepala_unit,staf',
+            'status_pegawai'       => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
+            'status_kerja'         => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
+            'kode_unit'            => 'nullable|exists:units,kode_unit',
+            'is_pj_data'           => 'nullable|boolean',
+            'pj_data_tim'          => 'nullable|string|max:200',
+            'is_penilai_pj_data'   => 'nullable|boolean',
         ], [
             'name.required'     => 'Nama wajib diisi',
             'nip.unique'        => 'NIP sudah digunakan',
@@ -59,9 +60,9 @@ class PegawaiController extends Controller
             'nip'            => $request->nip ?: null,
             'password'       => Hash::make($request->password),
             'role'           => $role,
-            'status_pegawai' => $request->status_pegawai,
-            'status_kerja'   => $request->status_kerja,
-            'kode_unit'      => $request->kode_unit,
+            'status_pegawai' => $request->status_pegawai ?: null,
+            'status_kerja'   => $request->status_kerja ?: null,
+            'kode_unit'      => $request->kode_unit ?: null,
         ]);
 
         return redirect()->back()->with('success', 'Pegawai berhasil ditambahkan!');
@@ -77,15 +78,16 @@ class PegawaiController extends Controller
         $pegawai = User::findOrFail($id);
 
         $request->validate([
-            'name'           => 'required|string|max:255',
-            'nip'            => 'nullable|string|max:30|unique:users,nip,' . $id,
-            'password'       => 'nullable|string|min:6',
-            'base_role'      => 'required|in:admin_mutu,kepala_unit,staf',
-            'status_pegawai' => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
-            'status_kerja'   => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
-            'kode_unit'      => 'nullable|exists:units,kode_unit',
-            'is_pj_data'     => 'nullable|boolean',
-            'pj_data_tim'    => 'nullable|string|max:200',
+            'name'                 => 'required|string|max:255',
+            'nip'                  => 'nullable|string|max:30|unique:users,nip,' . $id,
+            'password'             => 'nullable|string|min:6',
+            'base_role'            => 'required|in:admin_mutu,kepala_unit,staf',
+            'status_pegawai'       => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
+            'status_kerja'         => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
+            'kode_unit'            => 'nullable|exists:units,kode_unit',
+            'is_pj_data'           => 'nullable|boolean',
+            'pj_data_tim'          => 'nullable|string|max:200',
+            'is_penilai_pj_data'   => 'nullable|boolean',
         ], [
             'name.required'      => 'Nama wajib diisi',
             'nip.unique'         => 'NIP sudah digunakan',
@@ -99,9 +101,9 @@ class PegawaiController extends Controller
             'name'           => $request->name,
             'nip'            => $request->nip ?: null,
             'role'           => $role,
-            'status_pegawai' => $request->status_pegawai,
-            'status_kerja'   => $request->status_kerja,
-            'kode_unit'      => $request->kode_unit,
+            'status_pegawai' => $request->status_pegawai ?: null,
+            'status_kerja'   => $request->status_kerja ?: null,
+            'kode_unit'      => $request->kode_unit ?: null,
         ];
 
         if ($request->filled('password')) {
@@ -111,6 +113,32 @@ class PegawaiController extends Controller
         $pegawai->update($updateData);
 
         return redirect()->back()->with('success', 'Pegawai berhasil diupdate!');
+    }
+
+    /**
+     * Update hanya field role (PJ Data / Penilai PJ Data toggle).
+     * Endpoint terpisah agar tidak perlu validasi field lain (status_pegawai, dll).
+     */
+    public function updatePjRole(Request $request, $id)
+    {
+        $user = Auth::user();
+        if ($user->role !== 'admin_mutu') {
+            abort(403);
+        }
+
+        $pegawai = User::findOrFail($id);
+
+        $request->validate([
+            'base_role'          => 'required|in:admin_mutu,kepala_unit,staf',
+            'is_pj_data'         => 'nullable|boolean',
+            'pj_data_tim'        => 'nullable|string|max:200',
+            'is_penilai_pj_data' => 'nullable|boolean',
+        ]);
+
+        $role = $this->resolveRole($request);
+        $pegawai->update(['role' => $role]);
+
+        return redirect()->back()->with('success', 'Status PJ Data berhasil diupdate!');
     }
 
     public function destroy($id)
@@ -136,6 +164,11 @@ class PegawaiController extends Controller
     private function resolveRole(Request $request): string
     {
         $baseRole = $request->base_role;
+
+        if ($request->boolean('is_penilai_pj_data') && $baseRole === 'staf') {
+            $tim = trim($request->pj_data_tim ?? '');
+            return $tim !== '' ? "penilai_pj_data - {$tim}" : 'penilai_pj_data';
+        }
 
         if ($request->boolean('is_pj_data') && $baseRole === 'staf') {
             $tim = trim($request->pj_data_tim ?? '');
