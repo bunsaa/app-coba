@@ -9,6 +9,7 @@ use App\Models\Indikator;
 use App\Models\CapaianIndikator;
 use App\Models\Units;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
@@ -45,106 +46,112 @@ class DashboardController extends Controller
             }
         }
 
-        // Total indikator AKTIF — sama dengan logika rekap:
-        // INM & PRIORITAS: dihitung distinct per nama (1 indikator shared ke banyak unit = 1)
-        // SPM, IMUT_RS, IMUT_UNIT: setiap record dihitung 1
-        $baseQuery = fn() => $isAdmin
-            ? Indikator::where('is_active', true)
-            : Indikator::where('is_active', true)->where('kode_unit', $userUnitCode);
+        $cacheKey = 'dashboard_' . $user->id . '_' . Carbon::today()->format('Ymd');
 
-        $totalIndikator =
-            $baseQuery()->whereIn('jenis_indikator', ['INM', 'PRIORITAS'])->distinct('indikator')->count('indikator') +
-            $baseQuery()->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])->count();
+        $data = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($isAdmin, $userUnitCode, $user) {
+            // Total indikator AKTIF — sama dengan logika rekap:
+            // INM & PRIORITAS: dihitung distinct per nama (1 indikator shared ke banyak unit = 1)
+            // SPM, IMUT_RS, IMUT_UNIT: setiap record dihitung 1
+            $baseQuery = fn() => $isAdmin
+                ? Indikator::where('is_active', true)
+                : Indikator::where('is_active', true)->where('kode_unit', $userUnitCode);
 
-        // Awal hari ini (00:00:00)
-        $startOfToday = Carbon::today();
+            $totalIndikator =
+                $baseQuery()->whereIn('jenis_indikator', ['INM', 'PRIORITAS'])->distinct('indikator')->count('indikator') +
+                $baseQuery()->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])->count();
 
-        // Total indikator AKTIF sampai akhir kemarin (logika sama)
-        $baseQueryKemarin = fn() => $isAdmin
-            ? Indikator::where('is_active', true)->where('created_at', '<', $startOfToday)
-            : Indikator::where('is_active', true)->where('created_at', '<', $startOfToday)->where('kode_unit', $userUnitCode);
+            // Awal hari ini (00:00:00)
+            $startOfToday = Carbon::today();
 
-        $totalIndikatorKemarin =
-            $baseQueryKemarin()->whereIn('jenis_indikator', ['INM', 'PRIORITAS'])->distinct('indikator')->count('indikator') +
-            $baseQueryKemarin()->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])->count();
+            // Total indikator AKTIF sampai akhir kemarin (logika sama)
+            $baseQueryKemarin = fn() => $isAdmin
+                ? Indikator::where('is_active', true)->where('created_at', '<', $startOfToday)
+                : Indikator::where('is_active', true)->where('created_at', '<', $startOfToday)->where('kode_unit', $userUnitCode);
 
-        // Indikator baru AKTIF yang ditambahkan hari ini (filter berdasarkan unit untuk non-admin)
-        $indikatorBaruQuery = Indikator::where('is_active', true)
-            ->whereDate('created_at', $startOfToday)
-            ->with('unit');
-        if (!$isAdmin && $userUnitCode) {
-            $indikatorBaruQuery->where('kode_unit', $userUnitCode);
-        }
-        $indikatorBaruData = $indikatorBaruQuery->get();
+            $totalIndikatorKemarin =
+                $baseQueryKemarin()->whereIn('jenis_indikator', ['INM', 'PRIORITAS'])->distinct('indikator')->count('indikator') +
+                $baseQueryKemarin()->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])->count();
 
-        // Hitung indikator baru yang UNIK (berdasarkan nama indikator)
-        $indikatorBaru = $indikatorBaruData->pluck('indikator')->unique()->count();
+            // Indikator baru AKTIF yang ditambahkan hari ini (filter berdasarkan unit untuk non-admin)
+            $indikatorBaruQuery = Indikator::where('is_active', true)
+                ->whereDate('created_at', $startOfToday)
+                ->with('unit');
+            if (!$isAdmin && $userUnitCode) {
+                $indikatorBaruQuery->where('kode_unit', $userUnitCode);
+            }
+            $indikatorBaruData = $indikatorBaruQuery->get();
 
-        // Dapatkan daftar nama unit yang mendapat indikator baru (unik)
-        $daftarUnitIndikatorBaru = $indikatorBaruData
-            ->pluck('unit.nama_unit')
-            ->filter()
-            ->unique()
-            ->values()
-            ->toArray();
+            // Hitung indikator baru yang UNIK (berdasarkan nama indikator)
+            $indikatorBaru = $indikatorBaruData->pluck('indikator')->unique()->count();
 
-        // Hitung selisih
-        $perubahanIndikator = $totalIndikator - $totalIndikatorKemarin;
+            // Dapatkan daftar nama unit yang mendapat indikator baru (unik)
+            $daftarUnitIndikatorBaru = $indikatorBaruData
+                ->pluck('unit.nama_unit')
+                ->filter()
+                ->unique()
+                ->values()
+                ->toArray();
 
-        // ========== CAPAIAN BULANAN BERJALAN ==========
-        $capaianBulanan = $this->hitungCapaianBulanan($isAdmin, $userUnitCode);
+            // Hitung selisih
+            $perubahanIndikator = $totalIndikator - $totalIndikatorKemarin;
 
-        // ========== CAPAIAN TRIWULAN (TW) ==========
-        $capaianTriwulan = $this->hitungCapaianTriwulan($isAdmin, $userUnitCode);
+            // ========== CAPAIAN BULANAN BERJALAN ==========
+            $capaianBulanan = $this->hitungCapaianBulanan($isAdmin, $userUnitCode);
 
-        // ========== CAPAIAN TAHUNAN ==========
-        $capaianTahunan = $this->hitungCapaianTahunan($isAdmin, $userUnitCode);
+            // ========== CAPAIAN TRIWULAN (TW) ==========
+            $capaianTriwulan = $this->hitungCapaianTriwulan($isAdmin, $userUnitCode);
 
-        // ========== AKTIVITAS TERBARU ==========
-        $aktivitasTerbaru = $this->getAktivitasTerbaru($user);
+            // ========== CAPAIAN TAHUNAN ==========
+            $capaianTahunan = $this->hitungCapaianTahunan($isAdmin, $userUnitCode);
 
-        // ========== DATA GRAFIK ==========
-        $grafikBulanan = $this->getGrafikCapaianBulanan($isAdmin, $userUnitCode);
-        $dataCapaianBulananDetail = $this->getDataCapaianBulananDetail($isAdmin, $userUnitCode);
+            // ========== AKTIVITAS TERBARU ==========
+            $aktivitasTerbaru = $this->getAktivitasTerbaru($user);
 
-        // Get data for all 4 quarters
-        $semuaGrafikTriwulanan = [];
-        $semuaDataCapaianTriwulanDetail = [];
-        for ($tw = 1; $tw <= 4; $tw++) {
-            $semuaGrafikTriwulanan[$tw] = $this->getGrafikCapaianTriwulanan($isAdmin, $userUnitCode, $tw);
-            $semuaDataCapaianTriwulanDetail[$tw] = $this->getDataCapaianTriwulanDetail($isAdmin, $userUnitCode, $tw);
-        }
+            // ========== DATA GRAFIK ==========
+            $grafikBulanan = $this->getGrafikCapaianBulanan($isAdmin, $userUnitCode);
+            $dataCapaianBulananDetail = $this->getDataCapaianBulananDetail($isAdmin, $userUnitCode);
 
-        // Current triwulan
-        $triwulanSekarang = ceil(Carbon::now()->month / 3);
+            // Get data for all 4 quarters
+            $semuaGrafikTriwulanan = [];
+            $semuaDataCapaianTriwulanDetail = [];
+            for ($tw = 1; $tw <= 4; $tw++) {
+                $semuaGrafikTriwulanan[$tw] = $this->getGrafikCapaianTriwulanan($isAdmin, $userUnitCode, $tw);
+                $semuaDataCapaianTriwulanDetail[$tw] = $this->getDataCapaianTriwulanDetail($isAdmin, $userUnitCode, $tw);
+            }
 
-        // Get previous year annual data for download option
-        $tahunSebelumnya = Carbon::now()->year - 1;
-        $dataCapaianTahunanSebelumnya = $this->getDataCapaianTahunan($isAdmin, $userUnitCode, $tahunSebelumnya);
-        $dataCapaianTahunanDetail = $this->getDataCapaianTahunanDetail($isAdmin, $userUnitCode, $tahunSebelumnya);
+            // Current triwulan
+            $triwulanSekarang = ceil(Carbon::now()->month / 3);
 
-        // ========== RANKING DATA ==========
-        $rankingData = $this->getRankingData($isAdmin, $userUnitCode);
+            // Get previous year annual data for download option
+            $tahunSebelumnya = Carbon::now()->year - 1;
+            $dataCapaianTahunanSebelumnya = $this->getDataCapaianTahunan($isAdmin, $userUnitCode, $tahunSebelumnya);
+            $dataCapaianTahunanDetail = $this->getDataCapaianTahunanDetail($isAdmin, $userUnitCode, $tahunSebelumnya);
 
-        return Inertia::render('Dashboard', [
-            'totalIndikator' => $totalIndikator,
-            'indikatorBaru' => $indikatorBaru,
-            'perubahanIndikator' => $perubahanIndikator,
-            'totalIndikatorKemarin' => $totalIndikatorKemarin,
-            'daftarUnitIndikatorBaru' => $daftarUnitIndikatorBaru,
-            'capaianBulanan' => $capaianBulanan,
-            'capaianTriwulan' => $capaianTriwulan,
-            'capaianTahunan' => $capaianTahunan,
-            'aktivitasTerbaru' => $aktivitasTerbaru,
-            'grafikBulanan' => $grafikBulanan,
-            'dataCapaianBulananDetail' => $dataCapaianBulananDetail,
-            'semuaGrafikTriwulanan' => $semuaGrafikTriwulanan,
-            'semuaDataCapaianTriwulanDetail' => $semuaDataCapaianTriwulanDetail,
-            'triwulanSekarang' => $triwulanSekarang,
-            'dataCapaianTahunanSebelumnya' => $dataCapaianTahunanSebelumnya,
-            'dataCapaianTahunanDetail' => $dataCapaianTahunanDetail,
-            'rankingData' => $rankingData,
-        ]);
+            // ========== RANKING DATA ==========
+            $rankingData = $this->getRankingData($isAdmin, $userUnitCode);
+
+            return [
+                'totalIndikator'               => $totalIndikator,
+                'indikatorBaru'                => $indikatorBaru,
+                'perubahanIndikator'           => $perubahanIndikator,
+                'totalIndikatorKemarin'        => $totalIndikatorKemarin,
+                'daftarUnitIndikatorBaru'      => $daftarUnitIndikatorBaru,
+                'capaianBulanan'               => $capaianBulanan,
+                'capaianTriwulan'              => $capaianTriwulan,
+                'capaianTahunan'               => $capaianTahunan,
+                'aktivitasTerbaru'             => $aktivitasTerbaru,
+                'grafikBulanan'                => $grafikBulanan,
+                'dataCapaianBulananDetail'     => $dataCapaianBulananDetail,
+                'semuaGrafikTriwulanan'        => $semuaGrafikTriwulanan,
+                'semuaDataCapaianTriwulanDetail' => $semuaDataCapaianTriwulanDetail,
+                'triwulanSekarang'             => $triwulanSekarang,
+                'dataCapaianTahunanSebelumnya' => $dataCapaianTahunanSebelumnya,
+                'dataCapaianTahunanDetail'     => $dataCapaianTahunanDetail,
+                'rankingData'                  => $rankingData,
+            ];
+        });
+
+        return Inertia::render('Dashboard', $data);
     }
 
     /**

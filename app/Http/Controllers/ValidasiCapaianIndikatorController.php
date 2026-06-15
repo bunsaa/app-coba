@@ -55,8 +55,12 @@ class ValidasiCapaianIndikatorController extends Controller
 
         $bulan = $bulanField[$bulanDipilih];
         
-        // Get ALL units (including those without indicators)
-        $units = Units::with(['tim_units'])->orderBy('nama_unit', 'asc')->get();
+        // Get ALL units (excluding structural/non-operational units)
+        $excludedUnits = ['DEWAS', 'FarmasiTerapi', 'KJF', 'SPI', 'WADIR_AdminKum', 'WADIR_PEL'];
+        $units = Units::with(['tim_units'])
+            ->whereNotIn('kode_unit', $excludedUnits)
+            ->orderBy('nama_unit', 'asc')
+            ->get();
 
         // Transform data - GROUP BY UNIT ONLY
         $dataValidasi = [];

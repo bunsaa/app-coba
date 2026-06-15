@@ -13,7 +13,10 @@ class IndikatorsController extends Controller
 {
     public function index()
     {
+        $excludedUnits = ['DEWAS', 'FarmasiTerapi', 'KJF', 'SPI', 'WADIR_AdminKum', 'WADIR_PEL'];
+
         $units = Units::with('tim_units')
+            ->whereNotIn('kode_unit', $excludedUnits)
             ->orderBy('kode_unit', 'asc')
             ->get();
 
