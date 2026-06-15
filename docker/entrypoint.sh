@@ -24,7 +24,7 @@ chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache
 echo "==> Caching config/routes/views..."
 php artisan config:cache
 php artisan route:cache
-php artisan view:cache
+php artisan view:cache || echo "==> view:cache skipped (non-fatal)"
 
 echo "==> Starting PHP-FPM..."
 exec php-fpm
