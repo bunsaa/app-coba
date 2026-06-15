@@ -48,9 +48,9 @@ RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache \
     && chmod -R 775 /var/www/storage \
     && chmod -R 775 /var/www/bootstrap/cache
 
-# 7. Entrypoint script
+# 7. Entrypoint script (strip Windows CRLF line endings)
 COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 9000
 ENTRYPOINT ["/entrypoint.sh"]
