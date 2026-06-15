@@ -15,11 +15,11 @@ services:
       APP_ENV: production
       APP_KEY: ${APP_KEY}
       APP_URL: http://localhost:8080
-      DB_HOST: host.docker.internal
+      DB_HOST: 172.40.1.179
       DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:-contoh}
+      DB_DATABASE: ${DB_DATABASE:-tarakan}
       DB_USERNAME: ${DB_USERNAME:-root}
-      DB_PASSWORD: ${DB_PASSWORD:-}
+      DB_PASSWORD: ${DB_PASSWORD:-casaos}
       QUEUE_CONNECTION: database
       CACHE_STORE: file
       SESSION_DRIVER: file
@@ -59,11 +59,11 @@ services:
     environment:
       APP_ENV: production
       APP_KEY: ${APP_KEY}
-      DB_HOST: host.docker.internal
+      DB_HOST: 172.40.1.179
       DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:-contoh}
+      DB_DATABASE: ${DB_DATABASE:-tarakan}
       DB_USERNAME: ${DB_USERNAME:-root}
-      DB_PASSWORD: ${DB_PASSWORD:-}
+      DB_PASSWORD: ${DB_PASSWORD:-casaos}
       QUEUE_CONNECTION: database
     networks:
       - mutu_network
