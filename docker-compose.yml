@@ -15,11 +15,11 @@ services:
       APP_ENV: production
       APP_KEY: ${APP_KEY}
       APP_URL: http://localhost:8085
-      DB_HOST: 172.40.1.179
+      DB_HOST: localhost
       DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:-tarakan}
+      DB_DATABASE: ${DB_DATABASE:-contoh}
       DB_USERNAME: ${DB_USERNAME:-root}
-      DB_PASSWORD: ${DB_PASSWORD:-casaos}
+      DB_PASSWORD: ${DB_PASSWORD:-}
       QUEUE_CONNECTION: database
       CACHE_STORE: file
       SESSION_DRIVER: file
