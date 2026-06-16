@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\PenilaianPjData;
+use App\Models\Indikator;
+use App\Models\CapaianIndikator;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 
@@ -92,6 +94,39 @@ class PenilaianPjDataController extends Controller
             'rekomendasi.*.status'           => 'nullable|string',
             'is_submitted'                   => 'nullable|boolean',
         ]);
+
+        // Cek semua capaian harus terisi jika unit punya lebih dari 1 indikator
+        if ($request->has('aspek') && !empty($validated['aspek'])) {
+            $bulanFields = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','des'];
+            $bulanKey = $bulanFields[$validated['bulan'] - 1];
+            $numeratorField = "{$bulanKey}_n";
+
+            $indikatorQuery = Indikator::where('kode_unit', $validated['kode_unit'])
+                ->where('is_active', true);
+
+            $namaTim = $validated['nama_tim'] ?? null;
+            if (!empty($namaTim)) {
+                $indikatorQuery->where('tim_unit', $namaTim);
+            }
+
+            $totalIndikators = $indikatorQuery->count();
+
+            if ($totalIndikators > 1) {
+                $indikatorIds = (clone $indikatorQuery)->pluck('id');
+
+                $filledCapaian = CapaianIndikator::whereIn('indikator_id', $indikatorIds)
+                    ->where('tahun', $validated['tahun'])
+                    ->whereNotNull($numeratorField)
+                    ->count();
+
+                if ($filledCapaian < $totalIndikators) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => "Penilaian PJ belum dapat dilakukan. Unit ini memiliki {$totalIndikators} indikator aktif, namun baru {$filledCapaian} yang memiliki data capaian bulan ini. Lengkapi semua capaian terlebih dahulu.",
+                    ], 422);
+                }
+            }
+        }
 
         // Auto-hitung nilai dari aspek
         $nilai = null;
