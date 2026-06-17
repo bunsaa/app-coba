@@ -237,4 +237,38 @@ class PenilaianPjDataController extends Controller
             'updated_at'          => $p->updated_at ? $p->updated_at->toISOString() : null,
         ];
     }
+
+    /**
+     * Reset is_submitted ke false agar penilai bisa memperbaiki dan re-submit
+     */
+    public function resetSubmit(Request $request)
+    {
+        $validated = $request->validate([
+            'kode_unit' => 'required|string',
+            'nama_tim'  => 'nullable|string',
+            'tahun'     => 'required|integer',
+            'bulan'     => 'required|integer',
+        ]);
+
+        $query = PenilaianPjData::where('kode_unit', $validated['kode_unit'])
+            ->where('tahun', $validated['tahun'])
+            ->where('bulan', $validated['bulan']);
+
+        if (!empty($validated['nama_tim'])) {
+            $query->where('nama_tim', $validated['nama_tim']);
+        } else {
+            $query->whereNull('nama_tim');
+        }
+
+        $penilaian = $query->first();
+
+        if (!$penilaian) {
+            return response()->json(['error' => 'Data penilaian tidak ditemukan'], 404);
+        }
+
+        $penilaian->is_submitted = false;
+        $penilaian->save();
+
+        return response()->json(['success' => true]);
+    }
 }

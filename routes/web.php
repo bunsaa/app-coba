@@ -94,6 +94,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     // Penilaian PJ Data Routes
     Route::post('/penilaian-pj-data/store', [PenilaianPjDataController::class, 'store'])->name('penilaian-pj-data.store');
     Route::post('/penilaian-pj-data/get', [PenilaianPjDataController::class, 'get'])->name('penilaian-pj-data.get');
+    Route::post('/penilaian-pj-data/reset-submit', [PenilaianPjDataController::class, 'resetSubmit'])->name('penilaian-pj-data.reset-submit');
 
     // Capaian Indikator Routes
     Route::get('/capaian-indikator', [CapaianIndikatorController::class, 'index'])->name('capaian-indikator.index');

@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use App\Models\Units;
-use App\Models\TimUnits;
 use App\Models\Indikator;
 use App\Models\CapaianIndikator;
 use App\Models\CapaianLampiran;
@@ -605,6 +604,16 @@ if ($selectedUnitCode) {
             }
         }
 
+        // Reset is_submitted Penilai PJ Data agar Penilai perlu re-validasi setiap PJ Data update data
+        if ($primaryIndicator && $primaryIndicator->tim_unit) {
+            PenilaianPjData::where('kode_unit', $validated['kode_unit'])
+                ->where('nama_tim', $primaryIndicator->tim_unit)
+                ->where('tahun', $validated['tahun'])
+                ->where('bulan', $bulanMap[$validated['bulan']])
+                ->where('is_submitted', true)
+                ->update(['is_submitted' => false]);
+        }
+
         return response()->json(['success' => true, 'capaian' => $capaian, 'autoFilledIds' => $autoFilledIds]);
     }
 
@@ -970,7 +979,19 @@ if ($selectedUnitCode) {
             return response()->json(['error' => 'Data N/D belum diisi'], 422);
         }
 
+        // Simpan komentar ke history sebelum dihapus
+        if ($capaian->{$bulan . '_komentar'}) {
+            $history = $capaian->komentar_history ? json_decode($capaian->komentar_history, true) : [];
+            $history[] = [
+                'komentar' => $capaian->{$bulan . '_komentar'},
+                'tanggal'  => now()->format('Y-m-d H:i:s'),
+                'dibaca'   => (bool) ($capaian->{$bulan . '_komentar_dibaca'} ?? false),
+            ];
+            $capaian->komentar_history = json_encode($history);
+        }
+
         $capaian->{$bulan . '_approved'} = true;
+        $capaian->{$bulan . '_komentar'} = null;
         $capaian->approved_by = auth()->id();
         $capaian->approved_at = now();
         $capaian->save();
@@ -1010,14 +1031,31 @@ if ($selectedUnitCode) {
             return response()->json(['error' => 'Tidak ada indikator yang ditemukan'], 404);
         }
 
+        // Simpan komentar ke history sebelum dihapus (per-record, untuk yang punya komentar)
+        CapaianIndikator::whereIn('indikator_id', $indikatorIds)
+            ->where('tahun', $validated['tahun'])
+            ->whereNotNull($bulan . '_komentar')
+            ->where($bulan . '_komentar', '!=', '')
+            ->get()
+            ->each(function ($capaian) use ($bulan) {
+                $history = $capaian->komentar_history ? json_decode($capaian->komentar_history, true) : [];
+                $history[] = [
+                    'komentar' => $capaian->{$bulan . '_komentar'},
+                    'tanggal'  => now()->format('Y-m-d H:i:s'),
+                    'dibaca'   => (bool) ($capaian->{$bulan . '_komentar_dibaca'} ?? false),
+                ];
+                $capaian->komentar_history = json_encode($history);
+                $capaian->save();
+            });
+
         // Update all capaian for these indicators
         $updated = CapaianIndikator::whereIn('indikator_id', $indikatorIds)
             ->where('tahun', $validated['tahun'])
             ->whereNotNull($bulan . '_n')
             ->whereNotNull($bulan . '_d')
-            ->where($bulan . '_approved', false) // Hanya yang belum di-approve
             ->update([
                 $bulan . '_approved' => true,
+                $bulan . '_komentar' => null,
                 'approved_by' => auth()->id(),
                 'approved_at' => now(),
             ]);
@@ -1305,15 +1343,33 @@ if ($selectedUnitCode) {
             ], 422);
         }
 
-        // Update selected capaian - approve and clear any rejection
+        // Simpan komentar ke history sebelum dihapus (per-record, untuk yang punya komentar)
+        CapaianIndikator::whereIn('indikator_id', $validated['indikator_ids'])
+            ->where('kode_unit', $validated['kode_unit'])
+            ->where('tahun', $validated['tahun'])
+            ->whereNotNull($bulan . '_komentar')
+            ->where($bulan . '_komentar', '!=', '')
+            ->get()
+            ->each(function ($capaian) use ($bulan) {
+                $history = $capaian->komentar_history ? json_decode($capaian->komentar_history, true) : [];
+                $history[] = [
+                    'komentar' => $capaian->{$bulan . '_komentar'},
+                    'tanggal'  => now()->format('Y-m-d H:i:s'),
+                    'dibaca'   => (bool) ($capaian->{$bulan . '_komentar_dibaca'} ?? false),
+                ];
+                $capaian->komentar_history = json_encode($history);
+                $capaian->save();
+            });
+
+        // Update selected capaian - approve and clear any rejection/komentar
         $updated = CapaianIndikator::whereIn('indikator_id', $validated['indikator_ids'])
             ->where('kode_unit', $validated['kode_unit'])
             ->where('tahun', $validated['tahun'])
             ->whereNotNull($bulan . '_n')
             ->whereNotNull($bulan . '_d')
-            ->where($bulan . '_approved', false)
             ->update([
                 $bulan . '_approved' => true,
+                $bulan . '_komentar' => null,
                 $bulan . '_rejected' => false,
                 $bulan . '_reject_reason' => null,
                 'approved_by' => auth()->id(),

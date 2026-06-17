@@ -672,6 +672,13 @@ const selectedTimSubmitted = computed(() => {
   return !!(tim?.penilaian_pj?.is_submitted);
 });
 
+// Apakah semua indikator di tim yang dipilih sudah di-approve oleh kepala bagian?
+const selectedTimAllApproved = computed(() => {
+  const tim = (props.timApprovalSummary || []).find(t => t.nama_tim === selectedTimForApprove.value);
+  if (!tim || tim.total_indikator === 0) return false;
+  return tim.approved >= tim.total_indikator && tim.not_approved === 0;
+});
+
 // Filter approve status for tim approval summary
 const timApprovalStatusFilter = ref<'semua' | 'sudah' | 'belum'>('semua');
 
@@ -1258,26 +1265,18 @@ async function approveAllIndicators(approveAllTims: boolean = false) {
   // Jika approve semua tim (dari panel sebelum pilih tim)
   const isApprovingAllTims = approveAllTims || (!selectedTimUnitRef.value && hasTimUnits.value);
 
-  let confirmMessage = '';
-  if (isApprovingAllTims) {
-    confirmMessage = `Approve SEMUA indikator dari SEMUA TIM untuk bulan ${monthLabel(currentMonthKey.value)}?`;
-  } else {
+  if (!isApprovingAllTims) {
     const approvableCount = data.value.filter(ind => canApprove(ind, currentMonthKey.value)).length;
     if (approvableCount === 0) {
       alert('Tidak ada indikator yang dapat di-approve. Pastikan semua N dan D sudah diisi.');
       return;
     }
-    confirmMessage = `Approve ${approvableCount} indikator untuk bulan ${monthLabel(currentMonthKey.value)}?`;
-  }
-
-  if (!confirm(confirmMessage)) {
-    return;
   }
 
   approvingAll.value = true;
 
   try {
-    const response = await axios.post('/capaian-indikator/approve-all', {
+    await axios.post('/capaian-indikator/approve-all', {
       kode_unit: selectedUnitCode.value,
       tim_unit: isApprovingAllTims ? '__ALL__' : (selectedTimUnitRef.value || null),
       tahun: props.tahun,
@@ -1296,18 +1295,14 @@ async function approveAllIndicators(approveAllTims: boolean = false) {
       });
     }
 
-    alert(`${response.data.updated} indikator berhasil di-approve!`);
-
-    // Reload halaman jika approve semua tim
-    if (isApprovingAllTims) {
-      window.location.reload();
-    }
+    // Always reload to reflect updated state
+    window.location.reload();
   } catch (error: unknown) {
     console.error('Error approving all:', error);
     if (axios.isAxiosError(error)) {
-      alert(error.response?.data?.error || 'Gagal approve semua capaian');
+      approveModalError.value = error.response?.data?.error || 'Gagal approve semua capaian';
     } else {
-      alert('Gagal approve semua capaian');
+      approveModalError.value = 'Gagal approve semua capaian';
     }
   } finally {
     approvingAll.value = false;
@@ -1441,6 +1436,7 @@ async function viewIndicatorDetail(ind: TimIndikatorDetail) {
   viewingIndicatorDetail.value = ind;
   loadingIndicatorDetail.value = true;
   viewingIndicatorFullData.value = null;
+  detailActionError.value = '';
 
   try {
     // Fetch full indicator data from server
@@ -1500,6 +1496,7 @@ function backToIndicatorList() {
   loadingIndicatorDetail.value = false;
   detailRejectMode.value = false;
   detailRejectReason.value = '';
+  detailActionError.value = '';
 }
 
 // Terapkan hasil Rekomendasi AI ke form analisis/RTL detail
@@ -1589,37 +1586,32 @@ const isAllSelected = computed(() => {
 
 async function approveSelectedIndicators() {
   if (!isViewingCurrentMonth.value) {
-    alert('Approve hanya bisa dilakukan di bulan berjalan');
+    approveModalError.value = 'Approve hanya bisa dilakukan di bulan berjalan';
     return;
   }
   if (selectedIndikatorIds.value.length === 0) {
-    alert('Pilih minimal 1 indikator untuk di-approve');
-    return;
-  }
-
-  if (!confirm(`Approve ${selectedIndikatorIds.value.length} indikator yang dipilih?`)) {
+    approveModalError.value = 'Pilih minimal 1 indikator untuk di-approve';
     return;
   }
 
   approvingSelected.value = true;
+  approveModalError.value = '';
 
   try {
-    const response = await axios.post('/capaian-indikator/approve-selected', {
+    await axios.post('/capaian-indikator/approve-selected', {
       kode_unit: selectedUnitCode.value,
       tahun: props.tahun,
       bulan: viewMonthKey.value,
       indikator_ids: selectedIndikatorIds.value,
     });
-
-    alert(`${response.data.updated} indikator berhasil di-approve!`);
     closeApproveModal();
     window.location.reload();
   } catch (error: unknown) {
     console.error('Error approving selected:', error);
     if (axios.isAxiosError(error)) {
-      alert(error.response?.data?.error || 'Gagal approve indikator');
+      approveModalError.value = error.response?.data?.error || 'Gagal approve indikator';
     } else {
-      alert('Gagal approve indikator');
+      approveModalError.value = 'Gagal approve indikator';
     }
   } finally {
     approvingSelected.value = false;
@@ -1659,27 +1651,28 @@ async function applyAiFromPanel(analisis: string, rtl: string) {
 const approvingFromDetail = ref(false);
 const rejectingFromDetail = ref(false);
 const detailRejectMode = ref(false);
+const detailActionError = ref('');
+const approveModalError = ref('');
 const detailRejectReason = ref('');
 
 async function approveFromDetail() {
   if (!viewingIndicatorDetail.value || !isViewingCurrentMonth.value) return;
-  if (!confirm(`Approve indikator "${viewingIndicatorDetail.value.indikator}"?`)) return;
   approvingFromDetail.value = true;
+  detailActionError.value = '';
   try {
-    const response = await axios.post('/capaian-indikator/approve-selected', {
+    await axios.post('/capaian-indikator/approve-selected', {
       kode_unit: selectedUnitCode.value,
       tahun: props.tahun,
       bulan: viewMonthKey.value,
       indikator_ids: [viewingIndicatorDetail.value.id],
     });
-    alert(`${response.data.updated} indikator berhasil di-approve!`);
     closeApproveModal();
     window.location.reload();
   } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
-      alert(error.response?.data?.error || 'Gagal approve indikator');
+      detailActionError.value = error.response?.data?.error || 'Gagal approve indikator';
     } else {
-      alert('Gagal approve indikator');
+      detailActionError.value = 'Gagal approve indikator';
     }
   } finally {
     approvingFromDetail.value = false;
@@ -1690,22 +1683,22 @@ async function rejectFromDetail() {
   if (!viewingIndicatorDetail.value || !isViewingCurrentMonth.value) return;
   const reason = detailRejectReason.value.trim() || 'Ditolak oleh kepala unit';
   rejectingFromDetail.value = true;
+  detailActionError.value = '';
   try {
-    const response = await axios.post('/capaian-indikator/reject-selected', {
+    await axios.post('/capaian-indikator/reject-selected', {
       kode_unit: selectedUnitCode.value,
       tahun: props.tahun,
       bulan: viewMonthKey.value,
       indikator_ids: [viewingIndicatorDetail.value.id],
       reason: reason,
     });
-    alert(`${response.data.updated} indikator berhasil di-reject!`);
     closeApproveModal();
     window.location.reload();
   } catch (error: unknown) {
     if (axios.isAxiosError(error)) {
-      alert(error.response?.data?.error || 'Gagal reject indikator');
+      detailActionError.value = error.response?.data?.error || 'Gagal reject indikator';
     } else {
-      alert('Gagal reject indikator');
+      detailActionError.value = 'Gagal reject indikator';
     }
   } finally {
     rejectingFromDetail.value = false;
@@ -1716,62 +1709,61 @@ async function rejectFromDetail() {
 const validatingFromDetail = ref(false);
 
 async function validateFromDetail() {
-  if (!selectedTimForApprove.value || !selectedUnitCode.value) return;
-  if (!confirm(`Validasi data tim "${selectedTimForApprove.value}"? Setelah validasi, data akan muncul di halaman kepala unit.`)) return;
+  const unitCode = selectedUnitCode.value || (props.selectedUnit as any)?.kode_unit || '';
+  const timNama = selectedTimForApprove.value;
+  if (!timNama || !unitCode) return;
   validatingFromDetail.value = true;
+  detailActionError.value = '';
   try {
     await axios.post('/penilaian-pj-data/store', {
-      kode_unit: selectedUnitCode.value,
-      nama_tim: selectedTimForApprove.value === 'all' ? null : selectedTimForApprove.value,
+      kode_unit: unitCode,
+      nama_tim: timNama === 'all' ? null : timNama,
       tahun: props.tahun,
       bulan: props.viewMonth || props.currentMonth,
       is_submitted: true,
     });
-    router.reload({ only: ['timApprovalSummary'] });
-    closeApproveModal();
+    window.location.reload();
   } catch (error: unknown) {
-    if (axios.isAxiosError(error)) {
-      alert(error.response?.data?.error || 'Gagal menyimpan validasi');
-    } else {
-      alert('Gagal menyimpan validasi');
-    }
-  } finally {
     validatingFromDetail.value = false;
+    if (axios.isAxiosError(error)) {
+      detailActionError.value = error.response?.data?.error || error.response?.data?.message || 'Gagal menyimpan validasi';
+    } else {
+      detailActionError.value = 'Gagal menyimpan validasi';
+    }
   }
 }
 
 async function rejectSelectedIndicators() {
   if (!isViewingCurrentMonth.value) {
-    alert('Reject hanya bisa dilakukan di bulan berjalan');
+    approveModalError.value = 'Reject hanya bisa dilakukan di bulan berjalan';
     return;
   }
   if (selectedIndikatorIds.value.length === 0) {
-    alert('Pilih minimal 1 indikator untuk di-reject');
+    approveModalError.value = 'Pilih minimal 1 indikator untuk di-reject';
     return;
   }
 
   const reason = rejectReason.value.trim() || 'Ditolak oleh kepala unit';
 
   rejectingSelected.value = true;
+  approveModalError.value = '';
 
   try {
-    const response = await axios.post('/capaian-indikator/reject-selected', {
+    await axios.post('/capaian-indikator/reject-selected', {
       kode_unit: selectedUnitCode.value,
       tahun: props.tahun,
       bulan: viewMonthKey.value,
       indikator_ids: selectedIndikatorIds.value,
       reason: reason,
     });
-
-    alert(`${response.data.updated} indikator berhasil di-reject!`);
     closeApproveModal();
     window.location.reload();
   } catch (error: unknown) {
     console.error('Error rejecting selected:', error);
     if (axios.isAxiosError(error)) {
-      alert(error.response?.data?.error || 'Gagal reject indikator');
+      approveModalError.value = error.response?.data?.error || 'Gagal reject indikator';
     } else {
-      alert('Gagal reject indikator');
+      approveModalError.value = 'Gagal reject indikator';
     }
   } finally {
     rejectingSelected.value = false;
@@ -2735,17 +2727,18 @@ async function printPenilaian() {
                     </span>
                   </td>
                   <td class="px-4 py-3 text-center">
-                    <!-- Kepala/Admin: menunggu validasi dari Penilai PJ Data -->
+                    <!-- Penilai belum submit → kepala belum bisa approve (prioritas tertinggi) -->
                     <span
-                      v-if="!isPenilaianPjDataRole && tim.has_penilai && !tim.penilaian_pj?.is_submitted"
+                      v-if="!isPenilaianPjDataRole && tim.has_penilai && !tim.penilaian_pj?.is_submitted && (tim.approved + tim.not_approved) > 0"
                       class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-orange-100 text-orange-600 text-xs font-medium"
-                      title="Menunggu validasi dari Penilai PJ Data"
+                      title="Penilai PJ Data harus validasi terlebih dahulu sebelum kepala dapat approve"
                     >
                       <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                       </svg>
-                      Menunggu validasi
+                      Menunggu validasi penilai
                     </span>
+                    <!-- Tidak ada penilai / penilai sudah submit → kepala bisa approve -->
                     <button
                       v-else-if="timFilteredNotApproved(tim) > 0"
                       @click="openApproveModal(tim.nama_tim)"
@@ -2784,12 +2777,17 @@ async function printPenilaian() {
                   <!-- Penilaian PJ Column -->
                   <td v-if="!props.isAdmin" class="px-4 py-3 text-center">
                     <button
-                      @click="openTimPenilaianModal(tim)"
-                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border transition-all hover:shadow-sm"
-                      :class="tim.penilaian_pj?.nilai
-                        ? (nilaiColorMapCapaian[tim.penilaian_pj.nilai ?? ''] ?? 'bg-gray-100 text-gray-500 border-gray-200')
-                        : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'"
-                      title="Isi / Lihat Penilaian PJ Data"
+                      @click="(tim.approved + tim.not_approved) >= tim.total_indikator && tim.total_indikator > 0 ? openTimPenilaianModal(tim) : undefined"
+                      :disabled="(tim.approved + tim.not_approved) < tim.total_indikator || tim.total_indikator === 0"
+                      class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold border transition-all"
+                      :class="(tim.approved + tim.not_approved) < tim.total_indikator || tim.total_indikator === 0
+                        ? 'bg-gray-50 text-gray-300 border-gray-100 cursor-not-allowed'
+                        : tim.penilaian_pj?.nilai
+                          ? (nilaiColorMapCapaian[tim.penilaian_pj.nilai ?? ''] ?? 'bg-gray-100 text-gray-500 border-gray-200 hover:shadow-sm')
+                          : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200 hover:shadow-sm'"
+                      :title="(tim.approved + tim.not_approved) < tim.total_indikator || tim.total_indikator === 0
+                        ? 'Semua indikator harus terisi terlebih dahulu'
+                        : 'Isi / Lihat Penilaian PJ Data'"
                     >
                       <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -4057,32 +4055,42 @@ async function printPenilaian() {
           >
             ← Kembali
           </button>
-          <!-- Validasi button - hanya untuk Penilai PJ Data yang belum submit -->
-          <button
-            v-if="isPenilaianPjDataRole && isViewingCurrentMonth && !selectedTimSubmitted"
-            @click="validateFromDetail"
-            :disabled="validatingFromDetail"
-            class="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-sm font-semibold rounded-lg shadow hover:from-blue-600 hover:to-indigo-700 disabled:opacity-50 transition-all"
-          >
-            <svg v-if="validatingFromDetail" class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            <svg v-else class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            {{ validatingFromDetail ? 'Memproses...' : 'Validasi' }}
-          </button>
-          <!-- Sudah divalidasi badge - tampil setelah Penilai submit -->
-          <span
-            v-else-if="isPenilaianPjDataRole && selectedTimSubmitted"
-            class="inline-flex items-center gap-1.5 px-4 py-2 bg-green-100 text-green-700 text-sm font-semibold rounded-lg border border-green-200"
-          >
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Sudah Divalidasi
-          </span>
+          <!-- Status badge + Validasi button untuk Penilai PJ Data -->
+          <template v-if="isPenilaianPjDataRole">
+            <!-- Sudah Divalidasi -->
+            <span v-if="selectedTimSubmitted" class="inline-flex items-center gap-1.5 px-4 py-2 bg-green-100 text-green-700 text-sm font-semibold rounded-lg border border-green-200">
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Sudah Divalidasi
+            </span>
+            <!-- Belum Divalidasi + Tombol Validasi -->
+            <template v-else>
+              <span class="inline-flex items-center gap-1.5 px-4 py-2 bg-orange-50 text-orange-600 text-sm font-semibold rounded-lg border border-orange-200">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Belum Divalidasi
+              </span>
+              <button
+                v-if="isViewingCurrentMonth"
+                @click="validateFromDetail"
+                :disabled="validatingFromDetail"
+                class="inline-flex items-center gap-1.5 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white text-sm font-semibold rounded-lg shadow hover:from-blue-600 hover:to-indigo-700 disabled:opacity-50 transition-all"
+              >
+                <svg v-if="validatingFromDetail" class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <svg v-else class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                {{ validatingFromDetail ? 'Memproses...' : 'Validasi' }}
+              </button>
+            </template>
+          </template>
+          <!-- Error message for approve/reject/validasi actions -->
+          <p v-if="detailActionError" class="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-1.5 max-w-sm">{{ detailActionError }}</p>
           <!-- Approve/Reject buttons - hanya untuk Kepala/Admin dan tim tidak menunggu validasi -->
           <div v-if="!isPenilaianPjDataRole && !selectedTimAwaitingValidation && (viewingIndicatorDetail.can_approve || viewingIndicatorDetail.can_reject)" class="flex items-center gap-2">
             <!-- Reject -->
@@ -4118,7 +4126,9 @@ async function printPenilaian() {
       </div>
 
       <!-- Footer - hidden when viewing detail -->
-      <div v-if="!viewingIndicatorDetail" class="border-t px-6 py-4 flex items-center justify-between bg-gray-50">
+      <div v-if="!viewingIndicatorDetail" class="border-t px-6 py-4 bg-gray-50">
+        <p v-if="approveModalError" class="text-xs text-red-600 bg-red-50 border border-red-200 rounded px-3 py-1.5 mb-3">{{ approveModalError }}</p>
+        <div class="flex items-center justify-between">
         <button
           @click="closeApproveModal"
           class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors"
@@ -4154,6 +4164,7 @@ async function printPenilaian() {
             </svg>
             <span>{{ approvingSelected ? 'Memproses...' : `Approve (${selectedIndikatorIds.length})` }}</span>
           </button>
+        </div>
         </div>
       </div>
     </div>

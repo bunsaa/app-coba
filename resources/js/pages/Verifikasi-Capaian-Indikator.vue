@@ -497,8 +497,6 @@ async function kirimKomentar() {
 }
 
 async function clearKomentar(indikator: DetailCapaian) {
-  if (!confirm('Hapus komentar dan aktifkan kembali tombol verifikasi?')) return;
-
   try {
     await axios.post('/verifikasi-capaian-indikator/clear-komentar', {
       indikator_id: indikator.id,
@@ -564,8 +562,6 @@ async function verifikasiSingle(indikator: DetailCapaian) {
     return;
   }
 
-  if (!confirm(`Verifikasi indikator: ${indikator.indikator}?`)) return;
-
   try {
     await axios.post('/verifikasi-capaian-indikator/validate-single', {
       indikator_id: indikator.id,
@@ -609,12 +605,6 @@ async function verifikasiUnit() {
 
   if (!selectedUnit.value) return;
 
-  const confirmMsg = selectedTimUnitFilter.value 
-    ? `Verifikasi semua indikator di ${selectedUnit.value.unit_nama} - ${selectedTimUnitFilter.value}?`
-    : `Verifikasi semua indikator di ${selectedUnit.value.unit_nama}?`;
-
-  if (!confirm(confirmMsg)) return;
-
   try {
     const response = await axios.post('/verifikasi-capaian-indikator/validate-unit', {
       kode_unit: selectedUnit.value.unit_kode,
@@ -648,8 +638,6 @@ async function verifikasiSemuaUnit() {
     return;
   }
 
-  if (!confirm('Verifikasi SEMUA indikator yang sudah di-approve di SEMUA unit?')) return;
-
   try {
     const response = await axios.post('/verifikasi-capaian-indikator/validate-all', {
       tahun: props.tahunDipilih,
@@ -674,8 +662,6 @@ async function rejectSemuaUnit() {
     alert('Periode verifikasi sudah ditutup');
     return;
   }
-
-  if (!confirm('Reject SEMUA indikator yang sudah di-approve di SEMUA unit? Indikator akan kembali ke status belum approve.')) return;
 
   try {
     const response = await axios.post('/verifikasi-capaian-indikator/reject-all', {
@@ -770,6 +756,39 @@ const _unregisterAutoSave = registerAutoSave(async () => {
 })
 
 onUnmounted(_unregisterAutoSave)
+
+// ===== KOMENTAR TOOLTIP (Teleport) =====
+const komentarTooltip = ref<{
+  visible: boolean;
+  x: number;
+  y: number;
+  item: DetailCapaian | null;
+}>({ visible: false, x: 0, y: 0, item: null });
+
+let _tooltipHideTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showKomentarTooltip(event: MouseEvent, item: DetailCapaian) {
+  if (!item.komentar && !(item.komentar_history && item.komentar_history.length > 0)) return;
+  if (_tooltipHideTimer) clearTimeout(_tooltipHideTimer);
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const tooltipWidth = 320;
+  let x = rect.left;
+  if (x + tooltipWidth > window.innerWidth - 8) {
+    x = Math.max(8, rect.right - tooltipWidth);
+  }
+  komentarTooltip.value = { visible: true, x, y: rect.bottom + 8, item };
+}
+
+function hideKomentarTooltip() {
+  _tooltipHideTimer = setTimeout(() => {
+    komentarTooltip.value.visible = false;
+    komentarTooltip.value.item = null;
+  }, 150);
+}
+
+function keepTooltipOpen() {
+  if (_tooltipHideTimer) clearTimeout(_tooltipHideTimer);
+}
 </script>
 
 <template>
@@ -1170,49 +1189,23 @@ onUnmounted(_unregisterAutoSave)
                 </div>
 
                 <!-- Komentar Display - Icon dengan Tooltip -->
-                <div v-if="item.komentar" class="mb-3 flex items-center gap-2">
-                  <!-- Icon Catatan dengan Tooltip -->
-                  <div class="relative group">
-                    <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-50 border border-yellow-200 cursor-pointer">
-                      <MessageSquare :size="16" class="text-yellow-700" />
-                      <span class="text-xs font-medium text-yellow-700">Catatan Revisi</span>
-                      <span v-if="item.komentar_history && item.komentar_history.length > 0"
-                            class="text-[10px] bg-yellow-600 text-white px-1.5 py-0.5 rounded-full">
-                        {{ item.komentar_history.length + 1 }}
-                      </span>
-                    </div>
-
-                    <!-- Tooltip dengan History -->
-                    <div class="absolute left-0 top-full mt-2 w-80 bg-white border border-gray-300 rounded-lg shadow-xl p-4 z-50 hidden group-hover:block">
-                      <!-- Komentar Terbaru -->
-                      <div class="mb-3 pb-3 border-b border-gray-200">
-                        <p class="text-xs font-semibold text-yellow-700 mb-1">Catatan Terbaru:</p>
-                        <p class="text-sm text-gray-700">{{ item.komentar }}</p>
-                        <p class="text-xs text-gray-400 mt-1">
-                          Status: {{ item.komentar_dibaca ? '✓ Sudah direvisi' : 'Menunggu revisi' }}
-                        </p>
-                      </div>
-
-                      <!-- History (jika ada) -->
-                      <div v-if="item.komentar_history && item.komentar_history.length > 0">
-                        <p class="text-xs font-semibold text-gray-600 mb-2">Riwayat Catatan:</p>
-                        <div class="space-y-2 max-h-48 overflow-y-auto">
-                          <div v-for="(hist, idx) in item.komentar_history" :key="idx"
-                               class="text-xs bg-gray-50 p-2 rounded border border-gray-200">
-                            <p class="text-gray-700 mb-1">{{ hist.komentar }}</p>
-                            <p class="text-gray-400 text-[10px]">
-                              {{ new Date(hist.tanggal).toLocaleString('id-ID') }}
-                              • {{ hist.dibaca ? '✓ Direvisi' : 'Belum direvisi' }}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                <div v-if="item.komentar || (item.komentar_history && item.komentar_history.length > 0)" class="mb-3 flex items-center gap-2">
+                  <!-- Icon Catatan dengan Tooltip (via Teleport) -->
+                  <div
+                    class="flex items-center gap-2 px-3 py-2 rounded-lg bg-yellow-50 border border-yellow-200 cursor-pointer"
+                    @mouseenter="showKomentarTooltip($event, item)"
+                    @mouseleave="hideKomentarTooltip()"
+                  >
+                    <MessageSquare :size="16" class="text-yellow-700" />
+                    <span class="text-xs font-medium text-yellow-700">Catatan Revisi</span>
+                    <span class="text-[10px] bg-yellow-600 text-white px-1.5 py-0.5 rounded-full">
+                      {{ (item.komentar ? 1 : 0) + (item.komentar_history?.length ?? 0) }}
+                    </span>
                   </div>
 
-                  <!-- Tombol Hapus -->
+                  <!-- Tombol Hapus (hanya jika ada komentar aktif) -->
                   <button
-                    v-if="!item.validated && isBulanBerjalan"
+                    v-if="item.komentar && !item.validated && isBulanBerjalan"
                     @click="clearKomentar(item)"
                     class="text-red-600 hover:text-red-800"
                     title="Hapus komentar"
@@ -1280,14 +1273,21 @@ onUnmounted(_unregisterAutoSave)
 
                 <!-- Action Buttons -->
                 <div class="flex items-center gap-2 mt-4">
+                  <!-- Tombol Catatan + tooltip history saat hover (via Teleport) -->
                   <button
                     @click="openKomentarModal(item)"
+                    @mouseenter="showKomentarTooltip($event, item)"
+                    @mouseleave="hideKomentarTooltip()"
                     :disabled="item.validated || !isBulanBerjalan"
                     class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors"
                     :class="(item.validated || !isBulanBerjalan) ? 'border-gray-300 text-gray-400 cursor-not-allowed' : 'border-orange-300 text-orange-700 hover:bg-orange-50'"
                   >
                     <MessageSquare :size="14" />
                     {{ item.komentar && item.komentar_dibaca ? 'Tambah Catatan' : (item.komentar ? 'Edit Catatan' : 'Beri Catatan Revisi') }}
+                    <span v-if="(item.komentar ? 1 : 0) + (item.komentar_history?.length ?? 0) > 0"
+                          class="ml-1 text-[10px] bg-orange-500 text-white px-1.5 py-0.5 rounded-full">
+                      {{ (item.komentar ? 1 : 0) + (item.komentar_history?.length ?? 0) }}
+                    </span>
                   </button>
 
                   <button
@@ -1310,6 +1310,49 @@ onUnmounted(_unregisterAutoSave)
 </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- Tooltip Riwayat Catatan (Teleport ke body agar tidak ter-clip overflow) -->
+    <Teleport to="body">
+      <div
+        v-if="komentarTooltip.visible && komentarTooltip.item"
+        :style="{
+          position: 'fixed',
+          left: komentarTooltip.x + 'px',
+          top: komentarTooltip.y + 'px',
+          zIndex: 999999,
+          width: '320px',
+        }"
+        class="bg-white border border-gray-300 rounded-lg shadow-xl p-4"
+        @mouseenter="keepTooltipOpen()"
+        @mouseleave="hideKomentarTooltip()"
+      >
+        <!-- Catatan Aktif -->
+        <div v-if="komentarTooltip.item.komentar" class="mb-3 pb-3 border-b border-gray-200">
+          <p class="text-xs font-semibold text-yellow-700 mb-1">Catatan Aktif:</p>
+          <p class="text-sm text-gray-700">{{ komentarTooltip.item.komentar }}</p>
+          <p class="text-xs text-gray-400 mt-1">
+            Status: {{ komentarTooltip.item.komentar_dibaca ? '✓ Sudah direvisi' : 'Menunggu revisi' }}
+          </p>
+        </div>
+        <!-- Riwayat -->
+        <div v-if="komentarTooltip.item.komentar_history && komentarTooltip.item.komentar_history.length > 0">
+          <p class="text-xs font-semibold text-gray-600 mb-2">Riwayat Catatan:</p>
+          <div class="space-y-2 max-h-48 overflow-y-auto">
+            <div
+              v-for="(hist, idx) in komentarTooltip.item.komentar_history"
+              :key="idx"
+              class="text-xs bg-gray-50 p-2 rounded border border-gray-200"
+            >
+              <p class="text-gray-700 mb-1">{{ hist.komentar }}</p>
+              <p class="text-gray-400 text-[10px]">
+                {{ new Date(hist.tanggal).toLocaleString('id-ID') }}
+                • {{ hist.dibaca ? '✓ Direvisi' : 'Belum direvisi' }}
+              </p>
             </div>
           </div>
         </div>
