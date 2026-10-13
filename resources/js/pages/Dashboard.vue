@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import AppLayout from '@/layouts/AppLayout.vue';
 import { type BreadcrumbItem } from '@/types';
-import { Head } from '@inertiajs/vue3';
+import { Head, router } from '@inertiajs/vue3';
 import {
     BarElement,
     CategoryScale,
@@ -17,10 +17,13 @@ import {
     Award,
     CheckCircle,
     CheckSquare2,
+    ChevronLeft,
+    ChevronRight,
     ClipboardList,
     Clock,
     Download,
     FileSpreadsheet,
+    FileText,
     ImageIcon,
     InfoIcon,
     LoaderCircleIcon,
@@ -104,6 +107,7 @@ interface CapaianTahunan {
         triwulan: number;
         persentase: number;
     } | null;
+    twDetail: { triwulan: number; persentase: number }[];
 }
 
 interface Aktivitas {
@@ -256,6 +260,12 @@ interface Props {
     dataCapaianTahunanSebelumnya: DataCapaianTahunan;
     dataCapaianTahunanDetail: DataCapaianTahunanDetail;
     rankingData: RankingData;
+    bulanDipilih: number;
+    tahunDipilih: number;
+    bulanSekarang: number;
+    tahunSekarang: number;
+    userKodeUnit: string | null;
+    userTimUnit: string | null;
 }
 
 const props = defineProps<Props>();
@@ -282,6 +292,25 @@ function leaveTooltipTahunan()  { _t3 = setTimeout(() => { showTooltipTahunan.va
 const showDownloadMenuBulanan = ref(false);
 const showDownloadMenuTriwulan = ref(false);
 const showChartPopup = ref<null | 'bulanan' | 'triwulan'>(null);
+
+// ===== NAVIGASI BULAN =====
+const isCurrentMonth = computed(() =>
+    props.bulanDipilih === props.bulanSekarang && props.tahunDipilih === props.tahunSekarang
+);
+
+function navBulan(arah: 'prev' | 'next') {
+    let b = props.bulanDipilih;
+    let t = props.tahunDipilih;
+    if (arah === 'prev') {
+        b--;
+        if (b < 1) { b = 12; t--; }
+    } else {
+        if (isCurrentMonth.value) return;
+        b++;
+        if (b > 12) { b = 1; t++; }
+    }
+    router.get('/dashboard', { bulan: b, tahun: t }, { preserveScroll: true });
+}
 
 // Selected triwulan for navigation
 const selectedTriwulan = ref(props.triwulanSekarang);
@@ -343,6 +372,25 @@ const statusCapaianText = computed(() => {
     if (belumApprove > 0) parts.push(`${belumApprove} belum approve`);
     return parts.join(', ');
 });
+
+// PDF Laporan: show when non-admin AND all indikators have been verified by admin mutu
+const canDownloadLaporan = computed(() => {
+    if (!props.userKodeUnit) return false; // admin sees all units, no single-unit PDF
+    if (props.capaianBulanan.belumAdaIndikator) return false;
+    const belumApprove = props.capaianBulanan.daftarBelumApprove?.length || 0;
+    return belumApprove === 0;
+});
+
+function downloadLaporanPdf() {
+    const params = new URLSearchParams({
+        bulan: String(props.bulanDipilih),
+        tahun: String(props.tahunDipilih),
+        kode_unit: props.userKodeUnit ?? '',
+    });
+    if (props.userTimUnit) params.set('tim_unit', props.userTimUnit);
+    window.open(`/capaian-indikator/laporan/pdf?${params.toString()}`, '_blank');
+    showDownloadMenuBulanan.value = false;
+}
 
 // Chart configuration for Capaian Bulanan
 const chartBulananData = computed(() => ({
@@ -837,6 +885,30 @@ function onBottomRowLeave() {
                             <p class="text-sm font-medium text-gray-600">
                                 Capaian Bulanan
                             </p>
+                            <!-- Navigasi bulan -->
+                            <div class="mt-1.5 flex items-center gap-1">
+                                <button
+                                    @click="navBulan('prev')"
+                                    class="flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-500 hover:bg-yellow-100 hover:border-yellow-400 hover:text-yellow-700 transition-colors"
+                                    title="Bulan sebelumnya"
+                                >
+                                    <ChevronLeft :size="13" />
+                                </button>
+                                <span class="text-xs font-semibold text-gray-700 min-w-[90px] text-center">
+                                    {{ capaianBulanan.bulan }}
+                                </span>
+                                <button
+                                    @click="navBulan('next')"
+                                    :disabled="isCurrentMonth"
+                                    class="flex h-6 w-6 items-center justify-center rounded-full border border-gray-200 bg-gray-50 text-gray-500 hover:bg-yellow-100 hover:border-yellow-400 hover:text-yellow-700 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                    title="Bulan berikutnya"
+                                >
+                                    <ChevronRight :size="13" />
+                                </button>
+                                <span v-if="!isCurrentMonth" class="text-[10px] text-yellow-600 font-medium bg-yellow-50 border border-yellow-200 rounded px-1.5 py-0.5">
+                                    Histori
+                                </span>
+                            </div>
                             <h3 class="mt-2 text-3xl font-bold text-gray-800">
                                 {{ Math.min(capaianBulanan.persentase, 100) }} %
                                 <span v-if="capaianBulanan.persentase > 100" class="text-sm font-normal text-gray-400 ml-1">({{ capaianBulanan.persentase }}%)</span>
@@ -1040,18 +1112,18 @@ function onBottomRowLeave() {
                             {{ capaianTahunan.status }}
                         </p>
 
-                        <!-- Tooltip TW Sebelumnya -->
+                        <!-- Tooltip semua TW -->
                         <div
-                            v-if="showTooltipTahunan && capaianTahunan.twSebelumnya"
+                            v-if="showTooltipTahunan && capaianTahunan.twDetail && capaianTahunan.twDetail.length > 0"
                             class="absolute top-full left-0 z-50 mt-2 w-56 rounded-lg bg-gray-900 px-3 py-2 shadow-2xl"
                             @mouseenter="enterTooltipTahunan"
                             @mouseleave="leaveTooltipTahunan"
                         >
-                            <div class="flex items-center gap-2">
+                            <div v-for="tw in capaianTahunan.twDetail" :key="tw.triwulan" class="flex items-center gap-2 py-0.5">
                                 <InfoIcon :size="13" class="text-green-400 shrink-0" />
-                                <span class="text-xs text-white">Capaian TW {{ capaianTahunan.twSebelumnya.triwulan }}</span>
+                                <span class="text-xs text-white">Capaian TW {{ tw.triwulan }}</span>
                                 <span class="ml-auto text-sm font-bold text-green-400 whitespace-nowrap">
-                                    {{ Math.min(capaianTahunan.twSebelumnya.persentase, 100) }}%
+                                    {{ Math.min(tw.persentase, 100) }}%
                                 </span>
                             </div>
                             <div class="absolute -top-2 left-4 h-0 w-0 border-x-8 border-b-8 border-x-transparent border-b-gray-900"></div>
@@ -1118,6 +1190,14 @@ function onBottomRowLeave() {
                                         >
                                             <FileSpreadsheet :size="16" class="text-green-600" />
                                             Download Data (Excel)
+                                        </button>
+                                        <button
+                                            v-if="canDownloadLaporan"
+                                            class="flex w-full items-center gap-2 px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                                            @click="downloadLaporanPdf"
+                                        >
+                                            <FileText :size="16" class="text-red-600" />
+                                            Laporan Pemantauan (PDF)
                                         </button>
                                     </div>
                                 </div>

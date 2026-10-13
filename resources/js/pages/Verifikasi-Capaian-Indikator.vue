@@ -903,7 +903,7 @@ function keepTooltipOpen() {
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Sudah Approve</th>
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Terverifikasi</th>
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Belum Diverifikasi</th>
-                <th v-if="!isAdmin" class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Penilaian PJ Data</th>
+                <th v-if="!isAdmin" class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Supervisi PJ Data</th>
                 <th class="border px-4 py-3 text-center font-semibold text-gray-700 bg-gray-50">Aksi</th>
               </tr>
             </thead>
@@ -1408,7 +1408,7 @@ function keepTooltipOpen() {
           <!-- Header -->
           <div class="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600 rounded-t-2xl px-5 py-4 flex-shrink-0">
             <div>
-              <h4 class="text-base font-bold text-white">Penilaian PJ Data</h4>
+              <h4 class="text-base font-bold text-white">Supervisi PJ Data</h4>
               <p class="text-xs text-indigo-200 mt-0.5">{{ penilaianUnit?.unit_nama }} &bull; {{ namaBulanDipilih }} {{ tahunDipilih }}</p>
             </div>
             <!-- Nilai badge (auto-hitung) -->

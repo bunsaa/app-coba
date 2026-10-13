@@ -24,6 +24,7 @@ class User extends Authenticatable
         'password',
         'role',
         'status_pegawai',
+        'jabatan',
         'status_kerja',
         'kode_unit',
         'penilaian_aktif',

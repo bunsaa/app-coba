@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Inertia\Inertia;
 use App\Models\Units;
 use App\Models\Indikator;
+use App\Models\PengajuanIndikator;
 use App\Http\Requests\StoreIndikatorRequest;
 use Illuminate\Support\Facades\Log;
 
@@ -20,9 +21,52 @@ class IndikatorsController extends Controller
             ->orderBy('kode_unit', 'asc')
             ->get();
 
+        // Pengajuan yang sudah disetujui kepala unit, menunggu review admin
+        $pengajuanMenunggu = PengajuanIndikator::with('user')
+            ->where('status', 'disetujui_kepala')
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(fn($p) => [
+                'id'              => $p->id,
+                'user_nama'       => $p->user?->name ?? '-',
+                'kode_unit'       => $p->kode_unit,
+                'nama_tim'        => $p->nama_tim,
+                'judul_indikator' => $p->judul_indikator,
+                'jenis_indikator' => $p->jenis_indikator,
+                'dimensi_mutu'    => $p->dimensi_mutu,
+                'tujuan'          => $p->tujuan,
+                'definisi_operasional' => $p->definisi_operasional,
+                'numerator'       => $p->numerator,
+                'denominator'     => $p->denominator,
+                'target_tw1'      => $p->target_tw1,
+                'target_tw2'      => $p->target_tw2,
+                'target_tw3'      => $p->target_tw3,
+                'target_tw4'      => $p->target_tw4,
+                'satuan'          => $p->satuan,
+                'satuan_waktu'    => $p->satuan_waktu,
+                'dasar_pemikiran' => $p->dasar_pemikiran,
+                'kriteria_inklusi_eksklusi'   => $p->kriteria_inklusi_eksklusi,
+                'metode_pengumpulan_data'     => $p->metode_pengumpulan_data,
+                'sumber_data'                 => $p->sumber_data,
+                'instrumen_pengambilan_data'  => $p->instrumen_pengambilan_data,
+                'populasi_sampel'             => $p->populasi_sampel,
+                'penanggung_jawab' => $p->penanggung_jawab,
+                'skor_a'          => $p->skor_a,
+                'skor_b'          => $p->skor_b,
+                'skor_c'          => $p->skor_c,
+                'skor_d'          => $p->skor_d,
+                'skor_e'          => $p->skor_e,
+                'total_skor'      => $p->total_skor,
+                'reviewed_by_kepala' => $p->reviewed_by_kepala,
+                'reviewed_at_kepala' => $p->reviewed_at_kepala?->format('d/m/Y H:i'),
+                'catatan_kepala'  => $p->catatan_kepala,
+                'created_at'      => $p->created_at?->format('d/m/Y'),
+            ]);
+
         return Inertia::render('Indikator', [
-            'units' => $units,
-            'currentFilter' => ''
+            'units'             => $units,
+            'currentFilter'     => '',
+            'pengajuanMenunggu' => $pengajuanMenunggu,
         ]);
     }
 
@@ -112,20 +156,34 @@ class IndikatorsController extends Controller
             Log::info('Toggle active request for ID:', ['id' => $id]);
 
             $indikator = Indikator::findOrFail($id);
+            $newState  = !$indikator->is_active;
 
-            Log::info('Before toggle:', ['is_active' => $indikator->is_active]);
+            Log::info('Before toggle:', ['is_active' => $indikator->is_active, 'new_state' => $newState]);
 
-            $indikator->is_active = !$indikator->is_active;
-            $indikator->save();
+            if (!$newState) {
+                // Deactivating: bulk-deactivate ALL records with same indikator+kode_unit+tim_unit
+                // so old duplicates (different jenis_indikator) are also deactivated together.
+                $q = Indikator::where('kode_unit', $indikator->kode_unit)
+                    ->where('indikator', $indikator->indikator);
+                if ($indikator->tim_unit) {
+                    $q->where('tim_unit', $indikator->tim_unit);
+                } else {
+                    $q->whereNull('tim_unit');
+                }
+                $q->update(['is_active' => false]);
+            } else {
+                // Activating: only re-activate this specific record
+                $indikator->update(['is_active' => true]);
+            }
 
-            Log::info('After toggle:', ['is_active' => $indikator->is_active]);
+            Log::info('After toggle:', ['is_active' => $newState]);
 
-            $status = $indikator->is_active ? 'diaktifkan' : 'dinonaktifkan';
+            $status = $newState ? 'diaktifkan' : 'dinonaktifkan';
 
             return response()->json([
-                'success' => true,
-                'message' => "Indikator berhasil {$status}",
-                'is_active' => $indikator->is_active
+                'success'   => true,
+                'message'   => "Indikator berhasil {$status}",
+                'is_active' => $newState,
             ]);
         } catch (\Exception $e) {
             Log::error('Error toggle active:', [
@@ -403,6 +461,31 @@ class IndikatorsController extends Controller
                 'standar_tw4','satuan_tw4','satuan_waktu_tw4',
                 'numerator','denominator','is_active',
             ])->orderBy('id', 'asc')->get();
+
+            // DEDUP FIRST (keep most recently created per name+unit+tim), THEN filter pending.
+            // Order matters: dedup must run before the pending filter so that when the
+            // "canonical" record (highest ID) has a pending request, the whole group is excluded —
+            // not just that record while an old duplicate slips through.
+            $indikators = $indikators
+                ->groupBy(fn($i) => strtolower(trim($i->indikator)) . '|' . $i->kode_unit . '|' . ($i->tim_unit ?? ''))
+                ->map(fn($group) => $group->sortByDesc('id')->first())
+                ->values();
+
+            // Exclude indikators with a pending revision or nonaktif request.
+            $pendingRevisions = PengajuanIndikator::whereIn('status', ['pending_kepala', 'disetujui_kepala'])
+                ->get(['original_indikator_id', 'judul_indikator', 'kode_unit']);
+
+            $pendingByIdSet     = $pendingRevisions->whereNotNull('original_indikator_id')
+                ->pluck('original_indikator_id')->flip()->toArray();
+            $pendingByTitleKeys = $pendingRevisions->whereNull('original_indikator_id')
+                ->map(fn($p) => strtolower(trim($p->judul_indikator)) . '|' . $p->kode_unit)
+                ->flip()->toArray();
+
+            $indikators = $indikators->filter(function ($i) use ($pendingByIdSet, $pendingByTitleKeys) {
+                if (isset($pendingByIdSet[$i->id])) return false;
+                if (isset($pendingByTitleKeys[strtolower(trim($i->indikator)) . '|' . $i->kode_unit])) return false;
+                return true;
+            })->values();
 
             Log::info('Indikators found:', ['count' => $indikators->count()]);
 

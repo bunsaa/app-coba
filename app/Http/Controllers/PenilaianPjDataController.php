@@ -122,7 +122,7 @@ class PenilaianPjDataController extends Controller
                 if ($filledCapaian < $totalIndikators) {
                     return response()->json([
                         'success' => false,
-                        'message' => "Penilaian PJ belum dapat dilakukan. Unit ini memiliki {$totalIndikators} indikator aktif, namun baru {$filledCapaian} yang memiliki data capaian bulan ini. Lengkapi semua capaian terlebih dahulu.",
+                        'message' => "Supervisi PJ Data belum dapat dilakukan. Unit ini memiliki {$totalIndikators} indikator aktif, namun baru {$filledCapaian} yang memiliki data capaian bulan ini. Lengkapi semua capaian terlebih dahulu.",
                     ], 422);
                 }
             }

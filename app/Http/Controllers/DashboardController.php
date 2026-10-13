@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\DB;
 
 class DashboardController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
         $user = auth()->user();
 
@@ -46,9 +46,25 @@ class DashboardController extends Controller
             }
         }
 
-        $cacheKey = 'dashboard_' . $user->id . '_' . Carbon::today()->format('Ymd');
+        $bulanSekarang = Carbon::now()->month;
+        $tahunSekarang = Carbon::now()->year;
+        $bulanDipilih  = (int) $request->input('bulan', $bulanSekarang);
+        $tahunDipilih  = (int) $request->input('tahun', $tahunSekarang);
 
-        $data = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($isAdmin, $userUnitCode, $user) {
+        // Batasi: tidak bisa lebih dari bulan sekarang, tidak kurang dari 12 bulan lalu
+        $batasAwal = Carbon::now()->subMonths(23)->startOfMonth();
+        $dipilih   = Carbon::create($tahunDipilih, $bulanDipilih, 1);
+        if ($dipilih->gt(Carbon::create($tahunSekarang, $bulanSekarang, 1))) {
+            $bulanDipilih = $bulanSekarang;
+            $tahunDipilih = $tahunSekarang;
+        } elseif ($dipilih->lt($batasAwal)) {
+            $bulanDipilih = $batasAwal->month;
+            $tahunDipilih = $batasAwal->year;
+        }
+
+        $cacheKey = 'dashboard_' . $user->id . '_' . Carbon::today()->format('Ymd') . '_b' . $bulanDipilih . '_' . $tahunDipilih;
+
+        $data = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($isAdmin, $userUnitCode, $user, $bulanDipilih, $tahunDipilih) {
             // Total indikator AKTIF — sama dengan logika rekap:
             // INM & PRIORITAS: dihitung distinct per nama (1 indikator shared ke banyak unit = 1)
             // SPM, IMUT_RS, IMUT_UNIT: setiap record dihitung 1
@@ -56,9 +72,16 @@ class DashboardController extends Controller
                 ? Indikator::where('is_active', true)
                 : Indikator::where('is_active', true)->where('kode_unit', $userUnitCode);
 
+            // For SPM/IMUT_RS/IMUT_UNIT: use DISTINCT on (indikator, kode_unit, tim_unit) so legacy
+            // duplicate records (same name + unit + tim, different jenis_indikator) count as one.
+            $nonPrioritasCount = (int) ($baseQuery()
+                ->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])
+                ->selectRaw('COUNT(DISTINCT CONCAT(LOWER(TRIM(indikator)), "|", kode_unit, "|", IFNULL(tim_unit, ""))) as cnt')
+                ->value('cnt') ?? 0);
+
             $totalIndikator =
                 $baseQuery()->whereIn('jenis_indikator', ['INM', 'PRIORITAS'])->distinct('indikator')->count('indikator') +
-                $baseQuery()->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])->count();
+                $nonPrioritasCount;
 
             // Awal hari ini (00:00:00)
             $startOfToday = Carbon::today();
@@ -68,9 +91,14 @@ class DashboardController extends Controller
                 ? Indikator::where('is_active', true)->where('created_at', '<', $startOfToday)
                 : Indikator::where('is_active', true)->where('created_at', '<', $startOfToday)->where('kode_unit', $userUnitCode);
 
+            $nonPrioritasCountKemarin = (int) ($baseQueryKemarin()
+                ->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])
+                ->selectRaw('COUNT(DISTINCT CONCAT(LOWER(TRIM(indikator)), "|", kode_unit, "|", IFNULL(tim_unit, ""))) as cnt')
+                ->value('cnt') ?? 0);
+
             $totalIndikatorKemarin =
                 $baseQueryKemarin()->whereIn('jenis_indikator', ['INM', 'PRIORITAS'])->distinct('indikator')->count('indikator') +
-                $baseQueryKemarin()->whereNotIn('jenis_indikator', ['INM', 'PRIORITAS'])->count();
+                $nonPrioritasCountKemarin;
 
             // Indikator baru AKTIF yang ditambahkan hari ini (filter berdasarkan unit untuk non-admin)
             $indikatorBaruQuery = Indikator::where('is_active', true)
@@ -96,20 +124,20 @@ class DashboardController extends Controller
             $perubahanIndikator = $totalIndikator - $totalIndikatorKemarin;
 
             // ========== CAPAIAN BULANAN BERJALAN ==========
-            $capaianBulanan = $this->hitungCapaianBulanan($isAdmin, $userUnitCode);
+            $capaianBulanan = $this->hitungCapaianBulanan($isAdmin, $userUnitCode, $bulanDipilih, $tahunDipilih);
 
             // ========== CAPAIAN TRIWULAN (TW) ==========
-            $capaianTriwulan = $this->hitungCapaianTriwulan($isAdmin, $userUnitCode);
+            $capaianTriwulan = $this->hitungCapaianTriwulan($isAdmin, $userUnitCode, $bulanDipilih, $tahunDipilih);
 
             // ========== CAPAIAN TAHUNAN ==========
-            $capaianTahunan = $this->hitungCapaianTahunan($isAdmin, $userUnitCode);
+            $capaianTahunan = $this->hitungCapaianTahunan($isAdmin, $userUnitCode, $bulanDipilih, $tahunDipilih);
 
             // ========== AKTIVITAS TERBARU ==========
             $aktivitasTerbaru = $this->getAktivitasTerbaru($user);
 
             // ========== DATA GRAFIK ==========
-            $grafikBulanan = $this->getGrafikCapaianBulanan($isAdmin, $userUnitCode);
-            $dataCapaianBulananDetail = $this->getDataCapaianBulananDetail($isAdmin, $userUnitCode);
+            $grafikBulanan = $this->getGrafikCapaianBulanan($isAdmin, $userUnitCode, $bulanDipilih, $tahunDipilih);
+            $dataCapaianBulananDetail = $this->getDataCapaianBulananDetail($isAdmin, $userUnitCode, $bulanDipilih, $tahunDipilih);
 
             // Get data for all 4 quarters
             $semuaGrafikTriwulanan = [];
@@ -119,8 +147,8 @@ class DashboardController extends Controller
                 $semuaDataCapaianTriwulanDetail[$tw] = $this->getDataCapaianTriwulanDetail($isAdmin, $userUnitCode, $tw);
             }
 
-            // Current triwulan
-            $triwulanSekarang = ceil(Carbon::now()->month / 3);
+            // Triwulan berdasarkan bulan yang dipilih
+            $triwulanSekarang = (int) ceil($bulanDipilih / 3);
 
             // Get previous year annual data for download option
             $tahunSebelumnya = Carbon::now()->year - 1;
@@ -128,7 +156,7 @@ class DashboardController extends Controller
             $dataCapaianTahunanDetail = $this->getDataCapaianTahunanDetail($isAdmin, $userUnitCode, $tahunSebelumnya);
 
             // ========== RANKING DATA ==========
-            $rankingData = $this->getRankingData($isAdmin, $userUnitCode);
+            $rankingData = $this->getRankingData($isAdmin, $userUnitCode, $bulanDipilih, $tahunDipilih);
 
             return [
                 'totalIndikator'               => $totalIndikator,
@@ -148,10 +176,25 @@ class DashboardController extends Controller
                 'dataCapaianTahunanSebelumnya' => $dataCapaianTahunanSebelumnya,
                 'dataCapaianTahunanDetail'     => $dataCapaianTahunanDetail,
                 'rankingData'                  => $rankingData,
+                'bulanDipilih'                 => $bulanDipilih,
+                'tahunDipilih'                 => $tahunDipilih,
             ];
         });
 
-        return Inertia::render('Dashboard', $data);
+        // Extract tim from user role (e.g. "penilai_pj_data - Tim X" or "PJ Data - Tim X")
+        $userTimUnit = null;
+        if (str_starts_with($user->role ?? '', 'penilai_pj_data - ')) {
+            $userTimUnit = str_replace('penilai_pj_data - ', '', $user->role);
+        } elseif (str_starts_with($user->role ?? '', 'PJ Data - ')) {
+            $userTimUnit = str_replace('PJ Data - ', '', $user->role);
+        }
+
+        return Inertia::render('Dashboard', array_merge($data, [
+            'bulanSekarang' => $bulanSekarang,
+            'tahunSekarang' => $tahunSekarang,
+            'userKodeUnit'  => $userUnitCode,
+            'userTimUnit'   => $userTimUnit,
+        ]));
     }
 
     /**
@@ -159,10 +202,10 @@ class DashboardController extends Controller
      * Untuk admin: semua unit
      * Untuk non-admin: hanya unit yang login
      */
-    private function hitungCapaianBulanan($isAdmin = true, $userUnitCode = null)
+    private function hitungCapaianBulanan($isAdmin = true, $userUnitCode = null, $bulanSekarang = null, $tahunSekarang = null)
     {
-        $bulanSekarang = Carbon::now()->month;
-        $tahunSekarang = Carbon::now()->year;
+        $bulanSekarang = $bulanSekarang ?? Carbon::now()->month;
+        $tahunSekarang = $tahunSekarang ?? Carbon::now()->year;
 
         $bulanField = [
             1 => 'jan',
@@ -183,8 +226,18 @@ class DashboardController extends Controller
         $numeratorField = $fieldBulan . '_n';
         $denominatorField = $fieldBulan . '_d';
 
-        // Total indikator AKTIF (filter berdasarkan unit untuk non-admin)
-        $totalIndikatorAktifQuery = Indikator::where('is_active', true);
+        // Quarter berdasarkan bulan (untuk filter berlaku_tw)
+        $quarterBulan = (int) ceil($bulanSekarang / 3);
+
+        // Helper closure: tambahkan filter berlaku_tw ke query
+        $filterBerlakuTw = function ($q) use ($quarterBulan) {
+            $q->whereNull('berlaku_tw')
+              ->orWhereJsonContains('berlaku_tw', $quarterBulan);
+        };
+
+        // Total indikator AKTIF untuk TW berjalan (filter berlaku_tw)
+        $totalIndikatorAktifQuery = Indikator::where('is_active', true)
+            ->where($filterBerlakuTw);
         if (!$isAdmin && $userUnitCode) {
             $totalIndikatorAktifQuery->where('kode_unit', $userUnitCode);
         }
@@ -205,12 +258,13 @@ class DashboardController extends Controller
                 'daftarBelumMengisiPerJenis' => [],
                 'daftarBelumApprovePerJenis' => [],
                 'belumAdaIndikator' => true,
-                'bulan' => Carbon::now()->locale('id')->translatedFormat('F Y'),
+                'bulan' => Carbon::create($tahunSekarang, $bulanSekarang)->locale('id')->translatedFormat('F Y'),
             ];
         }
 
-        // Get all ACTIVE indikator IDs (filter berdasarkan unit untuk non-admin)
-        $activeIndikatorQuery = Indikator::where('is_active', true);
+        // Get all ACTIVE indikator IDs untuk TW berjalan (filter berlaku_tw)
+        $activeIndikatorQuery = Indikator::where('is_active', true)
+            ->where($filterBerlakuTw);
         if (!$isAdmin && $userUnitCode) {
             $activeIndikatorQuery->where('kode_unit', $userUnitCode);
         }
@@ -241,9 +295,9 @@ class DashboardController extends Controller
             }
         }
 
-        // Persentase = total hasil / TOTAL SEMUA indikator aktif (terisi maupun belum)
-        $persentaseCapaianBulanan = $totalIndikatorAktif > 0
-            ? round($totalHasil / $totalIndikatorAktif, 2)
+        // Persentase = total hasil / jumlah yang sudah terisi (bukan semua aktif)
+        $persentaseCapaianBulanan = $jumlahCapaian > 0
+            ? round($totalHasil / $jumlahCapaian, 2)
             : 0;
 
         // Total capaian yang harus masuk
@@ -277,8 +331,10 @@ class DashboardController extends Controller
             'IMUT_UNIT' => 'Indikator Mutu Unit',
         ];
 
-        // BATCH: Ambil semua indikator aktif sekaligus (id, kode_unit, jenis_indikator, tim_unit)
-        $allIndQ = Indikator::where('is_active', true)->select('id', 'kode_unit', 'jenis_indikator', 'tim_unit');
+        // BATCH: Ambil semua indikator aktif untuk TW berjalan (id, kode_unit, jenis_indikator, tim_unit)
+        $allIndQ = Indikator::where('is_active', true)
+            ->where($filterBerlakuTw)
+            ->select('id', 'kode_unit', 'jenis_indikator', 'tim_unit');
         if (!$isAdmin && $userUnitCode) {
             $allIndQ->where('kode_unit', $userUnitCode);
         }
@@ -458,7 +514,7 @@ class DashboardController extends Controller
             }
         }
 
-        $namaBulan = Carbon::now()->locale('id')->translatedFormat('F Y');
+        $namaBulan = Carbon::create($tahunSekarang, $bulanSekarang)->locale('id')->translatedFormat('F Y');
 
         return [
             'persentase' => $persentaseCapaianBulanan,
@@ -480,13 +536,13 @@ class DashboardController extends Controller
     /**
      * Hitung capaian triwulan = rata-rata hasil 3 bulan dalam TW
      */
-    private function hitungCapaianTriwulan($isAdmin = true, $userUnitCode = null)
+    private function hitungCapaianTriwulan($isAdmin = true, $userUnitCode = null, $bulanSekarang = null, $tahunSekarang = null)
     {
-        $bulanSekarang = Carbon::now()->month;
-        $tahunSekarang = Carbon::now()->year;
+        $bulanSekarang = $bulanSekarang ?? Carbon::now()->month;
+        $tahunSekarang = $tahunSekarang ?? Carbon::now()->year;
 
         // Tentukan triwulan berdasarkan bulan
-        $triwulan = ceil($bulanSekarang / 3);
+        $triwulan = (int) ceil($bulanSekarang / 3);
 
         // Mapping bulan ke triwulan
         $bulanPerTriwulan = [
@@ -498,8 +554,15 @@ class DashboardController extends Controller
 
         $bulanDalamTW = $bulanPerTriwulan[$triwulan];
 
-        // Total indikator AKTIF (filter berdasarkan unit untuk non-admin)
-        $totalIndikatorAktifQuery = Indikator::where('is_active', true);
+        // Helper closure: filter berlaku_tw untuk triwulan ini
+        $filterBerlakuTw = function ($q) use ($triwulan) {
+            $q->whereNull('berlaku_tw')
+              ->orWhereJsonContains('berlaku_tw', $triwulan);
+        };
+
+        // Total indikator AKTIF untuk TW ini (filter berlaku_tw)
+        $totalIndikatorAktifQuery = Indikator::where('is_active', true)
+            ->where($filterBerlakuTw);
         if (!$isAdmin && $userUnitCode) {
             $totalIndikatorAktifQuery->where('kode_unit', $userUnitCode);
         }
@@ -516,8 +579,9 @@ class DashboardController extends Controller
             ];
         }
 
-        // Get all ACTIVE indikator IDs (filter berdasarkan unit untuk non-admin)
-        $activeIndikatorQuery = Indikator::where('is_active', true);
+        // Get all ACTIVE indikator IDs untuk TW ini (filter berlaku_tw)
+        $activeIndikatorQuery = Indikator::where('is_active', true)
+            ->where($filterBerlakuTw);
         if (!$isAdmin && $userUnitCode) {
             $activeIndikatorQuery->where('kode_unit', $userUnitCode);
         }
@@ -546,8 +610,9 @@ class DashboardController extends Controller
             'IMUT_UNIT' => 'Indikator Mutu Unit',
         ];
 
-        // Ambil semua indikator aktif dengan jenis_indikator
-        $allActiveIndikators = Indikator::where('is_active', true);
+        // Ambil semua indikator aktif untuk TW ini (filter berlaku_tw) dengan jenis_indikator
+        $allActiveIndikators = Indikator::where('is_active', true)
+            ->where($filterBerlakuTw);
         if (!$isAdmin && $userUnitCode) {
             $allActiveIndikators->where('kode_unit', $userUnitCode);
         }
@@ -594,9 +659,9 @@ class DashboardController extends Controller
                 }
             }
 
-            // Bagi total semua indikator aktif (bukan hanya yang terisi)
-            $persentaseBulan = $totalIndikatorAktif > 0
-                ? round($totalHasil / $totalIndikatorAktif, 2)
+            // Bagi hanya yang sudah terisi (bukan semua aktif)
+            $persentaseBulan = $jumlahCapaian > 0
+                ? round($totalHasil / $jumlahCapaian, 2)
                 : 0;
 
             // Selalu tambahkan (termasuk 0 jika belum ada data), dibagi 3 di akhir
@@ -613,18 +678,19 @@ class DashboardController extends Controller
                     ->get();
 
                 $totalHasilJenis = 0;
-                $totalJenis = count($jenisIds);
+                $jumlahJenis = 0;
 
                 foreach ($capaianJenis as $cap) {
                     $n = $cap->{$numeratorField};
                     $d = $cap->{$denominatorField};
                     if ($d > 0) {
                         $totalHasilJenis += ($n / $d) * 100;
+                        $jumlahJenis++;
                     }
                 }
 
-                $persentaseJenis = $totalJenis > 0
-                    ? round($totalHasilJenis / $totalJenis, 2)
+                $persentaseJenis = $jumlahJenis > 0
+                    ? round($totalHasilJenis / $jumlahJenis, 2)
                     : 0;
 
                 $detailJenis[] = [
@@ -676,38 +742,21 @@ class DashboardController extends Controller
     /**
      * Hitung capaian tahunan = rata-rata hasil semua bulan yang sudah lewat
      */
-    private function hitungCapaianTahunan($isAdmin = true, $userUnitCode = null)
+    private function hitungCapaianTahunan($isAdmin = true, $userUnitCode = null, $bulanSekarang = null, $tahunSekarang = null)
     {
-        $bulanSekarang = Carbon::now()->month;
-        $tahunSekarang = Carbon::now()->year;
+        $bulanSekarang = $bulanSekarang ?? Carbon::now()->month;
+        $tahunSekarang = $tahunSekarang ?? Carbon::now()->year;
 
-        // Total indikator AKTIF (filter berdasarkan unit untuk non-admin)
-        $totalIndikatorAktifQuery = Indikator::where('is_active', true);
-        if (!$isAdmin && $userUnitCode) {
-            $totalIndikatorAktifQuery->where('kode_unit', $userUnitCode);
-        }
-        $totalIndikatorAktif = $totalIndikatorAktifQuery->count();
         $totalUnits = $isAdmin ? Units::count() : 1;
 
-        if ($totalIndikatorAktif == 0 || $totalUnits == 0) {
-            return [
-                'persentase' => 0,
-                'totalIndikator' => 0,
-                'totalValidasi' => 0,
-                'jumlahBulan' => $bulanSekarang,
-                'status' => 'tidak ada data',
-            ];
-        }
+        // TW dipilih (dari bulan yang sedang dilihat) — untuk menghitung rata-rata tahunan
+        $twDipilih = (int) ceil($bulanSekarang / 3);
 
-        // Get all ACTIVE indikator IDs (filter berdasarkan unit untuk non-admin)
-        $activeIndikatorQuery = Indikator::where('is_active', true);
-        if (!$isAdmin && $userUnitCode) {
-            $activeIndikatorQuery->where('kode_unit', $userUnitCode);
-        }
-        $activeIndikatorIds = $activeIndikatorQuery->pluck('id')->toArray();
+        // TW kalender saat ini — tooltip selalu tampil hingga TW ini
+        $twKalenderSekarang = (int) ceil(Carbon::now()->month / 3);
 
-        // TW berjalan
-        $twSekarang = (int) ceil($bulanSekarang / 3);
+        // Loop twDetail hingga TW kalender (bukan hanya TW dipilih)
+        $twSekarang = max($twDipilih, $twKalenderSekarang);
 
         $bulanPerTriwulanFull = [
             1 => ['jan', 'feb', 'mar'],
@@ -716,79 +765,95 @@ class DashboardController extends Controller
             4 => ['oct', 'nov', 'des'],
         ];
 
-        $totalPersentaseTahunan = 0;
+        // Cek ada indikator atau tidak (gunakan TW berjalan sebagai baseline)
+        $checkQuery = Indikator::where('is_active', true)
+            ->where(function ($q) use ($twSekarang) {
+                $q->whereNull('berlaku_tw')->orWhereJsonContains('berlaku_tw', $twSekarang);
+            });
+        if (!$isAdmin && $userUnitCode) {
+            $checkQuery->where('kode_unit', $userUnitCode);
+        }
+        if ($checkQuery->count() == 0 || $totalUnits == 0) {
+            return [
+                'persentase' => 0,
+                'totalIndikator' => 0,
+                'totalValidasi' => 0,
+                'jumlahBulan' => $twSekarang,
+                'status' => 'tidak ada data',
+                'twSebelumnya' => null,
+                'twDetail' => [],
+            ];
+        }
 
-        // Hitung capaian per TW (masing-masing 3 bulan / 3), lalu rata-ratakan per jumlah TW berjalan
+        $totalPersentaseTahunan = 0;
+        $twDetail = [];
+        $totalIndikatorAktifForReturn = 0;
+
+        // Hitung capaian per TW — masing-masing pakai indikator yang berlaku_tw sesuai TW-nya
         for ($tw = 1; $tw <= $twSekarang; $tw++) {
+            // Ambil indikator aktif yang berlaku untuk TW ini
+            $indQuery = Indikator::where('is_active', true)
+                ->where(function ($q) use ($tw) {
+                    $q->whereNull('berlaku_tw')->orWhereJsonContains('berlaku_tw', $tw);
+                });
+            if (!$isAdmin && $userUnitCode) {
+                $indQuery->where('kode_unit', $userUnitCode);
+            }
+            $twIndIds = $indQuery->pluck('id')->toArray();
+            $twTotalInd = count($twIndIds);
+
+            if ($tw === $twKalenderSekarang) {
+                $totalIndikatorAktifForReturn = $twTotalInd;
+            }
+
+            if ($twTotalInd === 0) {
+                $twDetail[] = ['triwulan' => $tw, 'persentase' => 0];
+                continue;
+            }
+
             $bulanTW = $bulanPerTriwulanFull[$tw];
             $totalPersentaseTW = 0;
             foreach ($bulanTW as $bulan) {
                 $nField = $bulan . '_n';
                 $dField = $bulan . '_d';
                 $caps = CapaianIndikator::where('tahun', $tahunSekarang)
-                    ->whereIn('indikator_id', $activeIndikatorIds)
+                    ->whereIn('indikator_id', $twIndIds)
                     ->whereNotNull($nField)
                     ->whereNotNull($dField)
                     ->where($dField, '>', 0)
                     ->get();
                 $sum = 0;
+                $cnt = 0;
                 foreach ($caps as $c) {
-                    if ($c->{$dField} > 0) { $sum += ($c->{$nField} / $c->{$dField}) * 100; }
+                    if ($c->{$dField} > 0) { $sum += ($c->{$nField} / $c->{$dField}) * 100; $cnt++; }
                 }
-                // Bagi total semua indikator aktif (bukan hanya yang terisi)
-                $totalPersentaseTW += $totalIndikatorAktif > 0 ? round($sum / $totalIndikatorAktif, 2) : 0;
+                $totalPersentaseTW += $cnt > 0 ? round($sum / $cnt, 2) : 0;
             }
-            $totalPersentaseTahunan += round($totalPersentaseTW / 3, 2);
+            $pctTW = round($totalPersentaseTW / 3, 2);
+            // Hanya masukkan ke rata-rata tahunan sampai TW yang dipilih
+            if ($tw <= $twDipilih) {
+                $totalPersentaseTahunan += $pctTW;
+            }
+            $twDetail[] = ['triwulan' => $tw, 'persentase' => $pctTW];
         }
 
-        // Rata-rata tahunan = total capaian TW / jumlah TW berjalan
-        $persentaseTahunan = round($totalPersentaseTahunan / $twSekarang, 2);
+        // Rata-rata tahunan = total capaian TW dipilih / jumlah TW dipilih
+        $persentaseTahunan = $twDipilih > 0 ? round($totalPersentaseTahunan / $twDipilih, 2) : 0;
 
         // Status message
-        $bulanPerTriwulanAkhir = [1 => 3, 2 => 6, 3 => 9, 4 => 12];
-        $bulanAkhirTW = $bulanPerTriwulanAkhir[$twSekarang];
+        $status = "menunggu data TW " . $twKalenderSekarang;
 
-        if ($bulanSekarang <= $bulanAkhirTW) {
-            $status = "menunggu data TW " . $twSekarang;
-        } else {
-            $twBerikutnya = $twSekarang + 1;
-            $status = $twBerikutnya <= 4 ? "menunggu data TW " . $twBerikutnya : "data lengkap";
-        }
-
-        // Hitung capaian TW sebelumnya (untuk ditampilkan saat hover)
-        $twSebelumnyaData = null;
-        if ($twSekarang > 1) {
-            $twPrev = $twSekarang - 1;
-            $bulanTW = $bulanPerTriwulanFull[$twPrev];
-            $totalPct = 0;
-            foreach ($bulanTW as $bl) {
-                $nField = $bl . '_n';
-                $dField = $bl . '_d';
-                $caps = CapaianIndikator::where('tahun', $tahunSekarang)
-                    ->whereIn('indikator_id', $activeIndikatorIds)
-                    ->whereNotNull($nField)
-                    ->whereNotNull($dField)
-                    ->where($dField, '>', 0)
-                    ->get();
-                $sum = 0;
-                foreach ($caps as $c) {
-                    if ($c->{$dField} > 0) { $sum += ($c->{$nField} / $c->{$dField}) * 100; }
-                }
-                $totalPct += $totalIndikatorAktif > 0 ? round($sum / $totalIndikatorAktif, 2) : 0;
-            }
-            $twSebelumnyaData = [
-                'triwulan' => $twPrev,
-                'persentase' => round($totalPct / 3, 2),
-            ];
-        }
+        // Backward compat: twSebelumnya = TW tepat sebelum TW kalender
+        $twSebelumnyaData = $twKalenderSekarang > 1 ? ($twDetail[$twKalenderSekarang - 2] ?? null) : null;
 
         return [
             'persentase' => $persentaseTahunan,
-            'totalIndikator' => $totalIndikatorAktif * $totalUnits,
+            'totalIndikator' => $totalIndikatorAktifForReturn * $totalUnits,
             'totalValidasi' => 0,
-            'jumlahBulan' => $twSekarang,
+            'jumlahBulan' => $twKalenderSekarang,
             'status' => $status,
             'twSebelumnya' => $twSebelumnyaData,
+            'twDetail' => $twDetail,
         ];
     }
 
@@ -1024,10 +1089,10 @@ class DashboardController extends Controller
      * Sumbu X: Unit kerja
      * Sumbu Y: Nilai capaian bulan ini
      */
-    private function getGrafikCapaianBulanan($isAdmin = true, $userUnitCode = null)
+    private function getGrafikCapaianBulanan($isAdmin = true, $userUnitCode = null, $bulanSekarang = null, $tahunSekarang = null)
     {
-        $bulanSekarang = Carbon::now()->month;
-        $tahunSekarang = Carbon::now()->year;
+        $bulanSekarang = $bulanSekarang ?? Carbon::now()->month;
+        $tahunSekarang = $tahunSekarang ?? Carbon::now()->year;
 
         $bulanField = [
             1 => 'jan', 2 => 'feb', 3 => 'mar', 4 => 'apr',
@@ -1131,10 +1196,10 @@ class DashboardController extends Controller
     /**
      * Get detailed monthly data with individual indicators for Excel download
      */
-    private function getDataCapaianBulananDetail($isAdmin = true, $userUnitCode = null)
+    private function getDataCapaianBulananDetail($isAdmin = true, $userUnitCode = null, $bulanSekarang = null, $tahunSekarang = null)
     {
-        $bulanSekarang = Carbon::now()->month;
-        $tahunSekarang = Carbon::now()->year;
+        $bulanSekarang = $bulanSekarang ?? Carbon::now()->month;
+        $tahunSekarang = $tahunSekarang ?? Carbon::now()->year;
 
         $bulanField = [
             1 => 'jan', 2 => 'feb', 3 => 'mar', 4 => 'apr',
@@ -1492,10 +1557,10 @@ class DashboardController extends Controller
     /**
      * Get ranking data: top 5 fastest, top 5 most commented, bottom 5 slowest units
      */
-    private function getRankingData($isAdmin = true, $userUnitCode = null)
+    private function getRankingData($isAdmin = true, $userUnitCode = null, $bulanSekarang = null, $tahun = null)
     {
-        $tahun = Carbon::now()->year;
-        $bulanSekarang = Carbon::now()->month;
+        $bulanSekarang = $bulanSekarang ?? Carbon::now()->month;
+        $tahun = $tahun ?? Carbon::now()->year;
         $allMonths = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'des'];
         $months = array_slice($allMonths, 0, $bulanSekarang);
         $currentMonthKey = $allMonths[$bulanSekarang - 1];

@@ -15,6 +15,8 @@ use App\Http\Controllers\PenilaianPerilakuController;
 use App\Http\Controllers\SetModeController;
 use App\Http\Controllers\RekomendasiAIController;
 use App\Http\Controllers\PenilaianPjDataController;
+use App\Http\Controllers\PengajuanIndikatorController;
+use App\Http\Controllers\ValidasiDataIndikatorController;
 
 Route::get('/', function () {
     return redirect()->route('login');
@@ -91,6 +93,23 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/pengaturan-penilaian/toggle-all', [PenilaianPerilakuController::class, 'toggleAllPenilaian']);
     Route::get('/penilaian-perilaku-pegawai/export', [PenilaianPerilakuController::class, 'export'])->name('penilaian-perilaku.export');
 
+    // Pengajuan Indikator Routes
+    Route::get('/pengajuan-indikator', [PengajuanIndikatorController::class, 'index'])->name('pengajuan-indikator.index');
+    Route::post('/pengajuan-indikator', [PengajuanIndikatorController::class, 'store'])->name('pengajuan-indikator.store');
+    Route::put('/pengajuan-indikator/{id}', [PengajuanIndikatorController::class, 'update'])->name('pengajuan-indikator.update');
+    Route::delete('/pengajuan-indikator/{id}', [PengajuanIndikatorController::class, 'destroy'])->name('pengajuan-indikator.destroy');
+    Route::post('/pengajuan-indikator/{id}/approve-kepala', [PengajuanIndikatorController::class, 'approveKepala']);
+    Route::post('/pengajuan-indikator/{id}/tolak-kepala', [PengajuanIndikatorController::class, 'tolakKepala']);
+    Route::post('/pengajuan-indikator/{id}/approve-admin', [PengajuanIndikatorController::class, 'approveAdmin']);
+    Route::post('/pengajuan-indikator/{id}/tolak-admin', [PengajuanIndikatorController::class, 'tolakAdmin']);
+    Route::post('/pengajuan-indikator/{id}/request-nonaktif', [PengajuanIndikatorController::class, 'requestNonaktif']);
+
+    // Validasi Data Indikator Routes
+    Route::post('/validasi-data-indikator/get', [ValidasiDataIndikatorController::class, 'get'])->name('validasi-data-indikator.get');
+    Route::post('/validasi-data-indikator/set-required', [ValidasiDataIndikatorController::class, 'setRequired'])->name('validasi-data-indikator.set-required');
+    Route::post('/validasi-data-indikator/save', [ValidasiDataIndikatorController::class, 'save'])->name('validasi-data-indikator.save');
+    Route::post('/validasi-data-indikator/get-all-for-year', [ValidasiDataIndikatorController::class, 'getAllForYear'])->name('validasi-data-indikator.get-all-for-year');
+
     // Penilaian PJ Data Routes
     Route::post('/penilaian-pj-data/store', [PenilaianPjDataController::class, 'store'])->name('penilaian-pj-data.store');
     Route::post('/penilaian-pj-data/get', [PenilaianPjDataController::class, 'get'])->name('penilaian-pj-data.get');
@@ -103,6 +122,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::post('/capaian-indikator/upload', [CapaianIndikatorController::class, 'uploadLampiran']);
     Route::get('/capaian-indikator/lampiran/download/{filename}', [CapaianIndikatorController::class, 'downloadLampiran'])->name('capaian-indikator.lampiran.download');
     Route::get('/capaian-indikator/lampiran/{filename}', [CapaianIndikatorController::class, 'viewLampiran'])->name('capaian-indikator.lampiran.view');
+    Route::get('/capaian-indikator/laporan/pdf', [CapaianIndikatorController::class, 'downloadLaporan'])->name('capaian-indikator.laporan.pdf');
     Route::post('/capaian-indikator/get-komentar', [CapaianIndikatorController::class, 'getKomentarForUnit']);
     Route::post('/capaian-indikator/mark-komentar-dibaca', [CapaianIndikatorController::class, 'markKomentarDibacaCapaian']);
     Route::post('/capaian-indikator/approve', [CapaianIndikatorController::class, 'approveCapaian']);

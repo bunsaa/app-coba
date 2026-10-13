@@ -39,7 +39,8 @@ class PegawaiController extends Controller
             'nip'                  => 'nullable|string|max:30|unique:users,nip',
             'password'             => 'required|string|min:6',
             'base_role'            => 'required|in:admin_mutu,kepala_unit,staf',
-            'status_pegawai'       => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
+            'status_pegawai'       => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai BLUD',
+            'jabatan'              => 'nullable|string|max:255',
             'status_kerja'         => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
             'kode_unit'            => 'nullable|exists:units,kode_unit',
             'is_pj_data'           => 'nullable|boolean',
@@ -50,7 +51,7 @@ class PegawaiController extends Controller
             'nip.unique'        => 'NIP sudah digunakan',
             'password.required' => 'Password wajib diisi',
             'password.min'      => 'Password minimal 6 karakter',
-            'base_role.required'=> 'Jabatan wajib dipilih',
+            'base_role.required'=> 'Peran wajib dipilih',
         ]);
 
         $role = $this->resolveRole($request);
@@ -61,6 +62,7 @@ class PegawaiController extends Controller
             'password'       => Hash::make($request->password),
             'role'           => $role,
             'status_pegawai' => $request->status_pegawai ?: null,
+            'jabatan'        => $request->jabatan ?: null,
             'status_kerja'   => $request->status_kerja ?: null,
             'kode_unit'      => $request->kode_unit ?: null,
         ]);
@@ -82,7 +84,8 @@ class PegawaiController extends Controller
             'nip'                  => 'nullable|string|max:30|unique:users,nip,' . $id,
             'password'             => 'nullable|string|min:6',
             'base_role'            => 'required|in:admin_mutu,kepala_unit,staf',
-            'status_pegawai'       => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai Blud (Tetap Non ASN),PJLP,Mitra,Pegawai Lainnya Non ASN',
+            'status_pegawai'       => 'nullable|in:PNS,CPNS,PPPK,PPPK Paruh Waktu,Pegawai BLUD',
+            'jabatan'              => 'nullable|string|max:255',
             'status_kerja'         => 'nullable|in:Aktif,Resign,Pensiun,Mutasi',
             'kode_unit'            => 'nullable|exists:units,kode_unit',
             'is_pj_data'           => 'nullable|boolean',
@@ -92,7 +95,7 @@ class PegawaiController extends Controller
             'name.required'      => 'Nama wajib diisi',
             'nip.unique'         => 'NIP sudah digunakan',
             'password.min'       => 'Password minimal 6 karakter',
-            'base_role.required' => 'Jabatan wajib dipilih',
+            'base_role.required' => 'Peran wajib dipilih',
         ]);
 
         $role = $this->resolveRole($request);
@@ -102,6 +105,7 @@ class PegawaiController extends Controller
             'nip'            => $request->nip ?: null,
             'role'           => $role,
             'status_pegawai' => $request->status_pegawai ?: null,
+            'jabatan'        => $request->jabatan ?: null,
             'status_kerja'   => $request->status_kerja ?: null,
             'kode_unit'      => $request->kode_unit ?: null,
         ];
@@ -159,17 +163,23 @@ class PegawaiController extends Controller
     }
 
     /**
-     * Resolusi role akhir berdasarkan base_role + is_pj_data + pj_data_tim.
+     * Resolusi role akhir:
+     * - Jika jabatan terisi → otomatis penilai_pj_data (jabatan menempel pada jabatan, bukan orang)
+     * - Jika jabatan kosong + is_pj_data → PJ Data
+     * - Selainnya → base_role
      */
     private function resolveRole(Request $request): string
     {
         $baseRole = $request->base_role;
+        $jabatan  = trim($request->jabatan ?? '');
 
-        if ($request->boolean('is_penilai_pj_data') && $baseRole === 'staf') {
+        // Jabatan terisi → otomatis jadi penilai PJ Data (tim dari pj_data_tim jika ada)
+        if ($jabatan !== '' && $baseRole === 'staf') {
             $tim = trim($request->pj_data_tim ?? '');
             return $tim !== '' ? "penilai_pj_data - {$tim}" : 'penilai_pj_data';
         }
 
+        // Jabatan kosong → manual PJ Data saja yang diperbolehkan
         if ($request->boolean('is_pj_data') && $baseRole === 'staf') {
             $tim = trim($request->pj_data_tim ?? '');
             return $tim !== '' ? "PJ Data - {$tim}" : 'PJ Data';

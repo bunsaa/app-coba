@@ -24,6 +24,7 @@ interface Pegawai {
   nip: string | null;
   role: string;
   status_pegawai: string | null;
+  jabatan: string | null;
   status_kerja: string | null;
   kode_unit: string | null;
   unit?: Unit | null;
@@ -47,19 +48,84 @@ const roleLabels: Record<string, string> = {
   penilai_pj_data: 'Penilai PJ Data',
 };
 
-// Opsi untuk field "Jabatan" (tipe kepegawaian, sebelumnya "Status Pegawai")
-const jabatanOptions = [
+// Opsi untuk field "Status Pegawai" (tipe kepegawaian: PNS, PPPK, dll)
+const statusPegawaiOptions = [
   'PNS',
   'CPNS',
   'PPPK',
   'PPPK Paruh Waktu',
-  'Pegawai Blud (Tetap Non ASN)',
-  'PJLP',
-  'Mitra',
-  'Pegawai Lainnya Non ASN',
+  'Pegawai BLUD',
 ];
 
-// Opsi untuk field "Status Pegawai" (status aktif/tidak)
+// Opsi Jabatan (posisi koordinator) - dikelompokkan per unit
+const jabatanGroups = [
+  {
+    label: 'Unit Bidang Pelayanan Keperawatan',
+    options: [
+      'Koordinator Satuan Pelaksana Pelayanan Mutu Asuhan Keperawatan dan Kebidanan',
+      'Koordinator Satuan Pelaksana Pelayanan Mobilisasi Keperawatan dan Kebidanan',
+      'Koordinator Satuan Pelaksana Pelayanan SDM Keperawatan dan Kebidanan',
+      'Koordinator Satuan Pelaksana Pelayanan Logistik Keperawatan dan Kebidanan',
+    ],
+  },
+  {
+    label: 'Unit Bidang Pelayanan Medik',
+    options: [
+      'Koordinator Satuan Pelaksana Casemix',
+      'Koordinator Instalasi Rawat Intensif',
+      'Koordinator Instalasi Gawat Darurat',
+      'Koordinator Instalasi Rawat Inap',
+      'Koordinator Instalasi Rawat Jalan',
+      'Koordinator Instalasi Bedah Sentral',
+    ],
+  },
+  {
+    label: 'Unit Bidang Penunjang',
+    options: [
+      'Koordinator Instalasi Penunjang Terapi',
+      'Koordinator Instalasi Rekam Medis',
+      'Koordinator Instalasi Penunjang Khusus',
+      'Koordinator Instalasi K3KL dan Pemeliharaan Alkes',
+    ],
+  },
+  {
+    label: 'Bagian Datin',
+    options: [
+      'Koordinator Satuan Pelaksana Pengembangan Sistem Informasi dan Aplikasi',
+      'Koordinator Satuan Pelaksana Pengelolaan Sarana Informasi dan Teknologi',
+      'Koordinator Satuan Pelaksana Pengelolaan Sistem dan Surveilance',
+    ],
+  },
+  {
+    label: 'Bagian Keuangan',
+    options: [
+      'Koordinator Satuan Pelaksana Mobilisasi Dana',
+      'Koordinator Satuan Pelaksana Perbendaharaan dan Verifikasi',
+      'Koordinator Satuan Pelaksana Perencanaan dan Anggaran',
+      'Koordinator Satuan Pelaksana Akuntansi',
+    ],
+  },
+  {
+    label: 'Bagian Umum dan Pemasaran',
+    options: [
+      'Koordinator Satuan Pelaksana PKRS',
+      'Koordinator Satuan Pelaksana Sekretariat dan Legal',
+      'Koordinator Satuan Pelaksana Rumah Tangga dan Perlengkapan',
+      'Koordinator Satuan Pelaksana Pemeliharaan Sarana dan Prasarana RS',
+    ],
+  },
+  {
+    label: 'Bagian SDM',
+    options: [
+      'Koordinator Satuan Pelaksana Perencanaan dan Pemberdayaan SDM',
+      'Koordinator Satuan Pelaksana Administrasi dan Kesejahteraan SDM',
+      'Koordinator Satuan Pelaksana Pengembangan SDM',
+      'Koordinator Satuan Pelaksana Pendidikan dan Penelitian',
+    ],
+  },
+];
+
+// Opsi untuk field "Status Kepegawaian" (status aktif/tidak)
 const statusKerjaOptions = ['Aktif', 'Resign', 'Pensiun', 'Mutasi'];
 
 const statusKerjaBadge: Record<string, string> = {
@@ -75,8 +141,11 @@ const flashError = computed(() => (page.props as any).flash?.error || '');
 
 /* ====== Helpers ====== */
 function getRoleDisplay(role: string): string {
-  if (role.startsWith('penilai_pj_data - ')) {
-    return 'Penilai PJ Data - ' + role.replace('penilai_pj_data - ', '');
+  if (role === 'penilai_pj_data' || role.startsWith('penilai_pj_data - ')) {
+    return 'Penilai PJ Data';
+  }
+  if (role === 'PJ Data' || role.startsWith('PJ Data - ')) {
+    return 'PJ Data';
   }
   return roleLabels[role] ?? role;
 }
@@ -165,8 +234,9 @@ const viewItem = ref<Pegawai | null>(null);
 
 // Add
 const showAdd = ref(false);
-const formAdd = ref({ name: '', nip: '', password: '', base_role: '', status_pegawai: '', status_kerja: '', kode_unit: '', is_pj_data: false, is_penilai_pj_data: false });
+const formAdd = ref({ name: '', nip: '', password: '', base_role: '', status_pegawai: '', jabatan: '', status_kerja: '', kode_unit: '', is_pj_data: false, is_penilai_pj_data: false });
 const selectedAddTims = ref<string[]>([]);
+const selectedAddPenilaiTim = ref('');
 const addTimError = ref('');
 const addErrors = ref<Record<string, string>>({});
 const isSubmitting = ref(false);
@@ -174,7 +244,7 @@ const isSubmitting = ref(false);
 // Edit — is_pj_data & pj_data_tim hidden, auto-populated to preserve status
 const showEdit = ref(false);
 const editItem = ref<Pegawai | null>(null);
-const formEdit = ref({ name: '', nip: '', password: '', base_role: '', status_pegawai: '', status_kerja: '', kode_unit: '', is_pj_data: false, is_penilai_pj_data: false, pj_data_tim: '' });
+const formEdit = ref({ name: '', nip: '', password: '', base_role: '', status_pegawai: '', jabatan: '', status_kerja: '', kode_unit: '', is_pj_data: false, is_penilai_pj_data: false, pj_data_tim: '' });
 const editErrors = ref<Record<string, string>>({});
 
 // Delete
@@ -197,20 +267,23 @@ watch(() => formAdd.value.base_role, (val) => {
     formAdd.value.is_pj_data = false;
     formAdd.value.is_penilai_pj_data = false;
     selectedAddTims.value = [];
+    selectedAddPenilaiTim.value = '';
     addTimError.value = '';
   }
 });
 watch(() => formAdd.value.is_pj_data, (val) => {
-  if (val) formAdd.value.is_penilai_pj_data = false;
-  else { selectedAddTims.value = []; addTimError.value = ''; }
+  if (!val) { selectedAddTims.value = []; addTimError.value = ''; }
 });
-watch(() => formAdd.value.is_penilai_pj_data, (val) => {
+// Jika jabatan diisi, reset is_pj_data (penilai otomatis dari jabatan)
+watch(() => formAdd.value.jabatan, (val) => {
   if (val) { formAdd.value.is_pj_data = false; selectedAddTims.value = []; addTimError.value = ''; }
+  else { selectedAddPenilaiTim.value = ''; }
 });
 watch(() => formAdd.value.kode_unit, () => {
   formAdd.value.is_pj_data = false;
   formAdd.value.is_penilai_pj_data = false;
   selectedAddTims.value = [];
+  selectedAddPenilaiTim.value = '';
   addTimError.value = '';
 });
 
@@ -286,7 +359,7 @@ function savePjDataUpdate(user: Pegawai, isPj: boolean, timStr: string) {
 
 /* ====== Penilai PJ Data inline (tabel) ====== */
 function handlePenilaianPjDataCheckbox(user: Pegawai) {
-  if (!user.kode_unit) return;
+  if (!user.kode_unit || !user.jabatan) return;
 
   // Jika sudah Penilai PJ Data → hapus langsung tanpa modal
   if (isPenilaiRole(user.role)) {
@@ -341,8 +414,9 @@ function openView(user: Pegawai) {
 }
 
 function openAdd() {
-  formAdd.value = { name: '', nip: '', password: '', base_role: '', status_pegawai: '', status_kerja: '', kode_unit: '', is_pj_data: false, is_penilai_pj_data: false };
+  formAdd.value = { name: '', nip: '', password: '', base_role: '', status_pegawai: '', jabatan: '', status_kerja: '', kode_unit: '', is_pj_data: false, is_penilai_pj_data: false };
   selectedAddTims.value = [];
+  selectedAddPenilaiTim.value = '';
   addTimError.value = '';
   addErrors.value = {};
   showAdd.value = true;
@@ -357,6 +431,7 @@ function openEdit(user: Pegawai) {
     password: '',
     base_role: parsed.base_role,
     status_pegawai: user.status_pegawai || '',
+    jabatan: user.jabatan || '',
     status_kerja: user.status_kerja || '',
     kode_unit: user.kode_unit || '',
     is_pj_data: parsed.is_pj_data,
@@ -379,14 +454,14 @@ function submitAdd() {
 
   if (!formAdd.value.name) { addErrors.value.name = 'Nama wajib diisi'; }
   if (!formAdd.value.password) { addErrors.value.password = 'Password wajib diisi'; }
-  if (!formAdd.value.base_role) { addErrors.value.base_role = 'Jabatan wajib dipilih'; }
+  if (!formAdd.value.base_role) { addErrors.value.base_role = 'Peran wajib dipilih'; }
 
   if (Object.keys(addErrors.value).length > 0) return;
 
   isSubmitting.value = true;
   router.post('/manajemen-pegawai', {
     ...formAdd.value,
-    pj_data_tim: selectedAddTims.value.join(', '),
+    pj_data_tim: formAdd.value.jabatan ? selectedAddPenilaiTim.value : selectedAddTims.value.join(', '),
   }, {
     preserveScroll: true,
     onSuccess: () => { showAdd.value = false; isSubmitting.value = false; },
@@ -399,7 +474,7 @@ function submitEdit() {
   editErrors.value = {};
 
   if (!formEdit.value.name) { editErrors.value.name = 'Nama wajib diisi'; }
-  if (!formEdit.value.base_role) { editErrors.value.base_role = 'Jabatan wajib dipilih'; }
+  if (!formEdit.value.base_role) { editErrors.value.base_role = 'Peran wajib dipilih'; }
 
   if (Object.keys(editErrors.value).length > 0) return;
 
@@ -471,6 +546,7 @@ function submitDelete() {
               <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Peran</th>
               <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Jabatan</th>
               <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Status Pegawai</th>
+              <th class="px-4 py-3 text-left font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700">Status Kepegawaian</th>
               <th class="px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700 w-48">PJ Data / Penilai</th>
               <th class="px-4 py-3 text-center font-semibold text-gray-700 dark:text-gray-200 border-b dark:border-gray-700 w-28">Aksi</th>
             </tr>
@@ -497,12 +573,18 @@ function submitDelete() {
                 </span>
               </td>
 
-              <!-- Jabatan (tipe kepegawaian: PNS, CPNS, dst) -->
+              <!-- Jabatan (posisi koordinator) -->
+              <td class="px-4 py-3 text-gray-900 dark:text-gray-100 text-sm max-w-[200px]">
+                <span v-if="user.jabatan" :title="user.jabatan" class="block truncate">{{ user.jabatan }}</span>
+                <span v-else class="text-gray-400">-</span>
+              </td>
+
+              <!-- Status Pegawai (PNS, CPNS, PPPK, dll) -->
               <td class="px-4 py-3 text-gray-900 dark:text-gray-100 text-sm">
                 {{ user.status_pegawai || '-' }}
               </td>
 
-              <!-- Status Pegawai (Aktif, Resign, Pensiun, Mutasi) -->
+              <!-- Status Kepegawaian (Aktif, Resign, Pensiun, Mutasi) -->
               <td class="px-4 py-3">
                 <span
                   v-if="user.status_kerja"
@@ -517,36 +599,32 @@ function submitDelete() {
               <!-- Kolom PJ Data / Penilai PJ Data -->
               <td class="px-4 py-3">
                 <template v-if="user.kode_unit && (user.role === 'staf' || user.role.startsWith('PJ Data') || isPenilaiRole(user.role))">
-                  <div class="flex items-center gap-3 justify-center">
-                    <!-- PJ Data checkbox -->
-                    <label class="flex items-center gap-1 cursor-pointer" :class="isPenilaiRole(user.role) ? 'opacity-50' : ''">
-                      <input
-                        type="checkbox"
-                        :checked="user.role.startsWith('PJ Data') || pjDataModal?.user.id === user.id"
-                        :disabled="isPenilaiRole(user.role)"
-                        @change="handlePjDataCheckbox(user)"
-                        class="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer disabled:cursor-not-allowed"
-                      />
-                      <span class="text-xs text-gray-600 dark:text-gray-400">PJ</span>
-                      <span v-if="getPjDataTims(user.role).length" class="text-xs text-teal-600 dark:text-teal-400 font-medium">
-                        ({{ getPjDataTims(user.role).join(', ') }})
+                  <!-- Jabatan terisi → penilai otomatis, tidak bisa diubah manual -->
+                  <template v-if="user.jabatan">
+                    <div class="flex items-center justify-center gap-1.5">
+                      <span class="inline-flex items-center gap-1 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 px-2 py-0.5 text-xs font-medium">
+                        Penilai (auto)
                       </span>
-                    </label>
-                    <!-- Penilai PJ Data checkbox -->
-                    <label class="flex items-center gap-1 cursor-pointer" :class="user.role.startsWith('PJ Data') ? 'opacity-50' : ''">
-                      <input
-                        type="checkbox"
-                        :checked="isPenilaiRole(user.role) || penilaiPjDataModal?.user.id === user.id"
-                        :disabled="user.role.startsWith('PJ Data')"
-                        @change="handlePenilaianPjDataCheckbox(user)"
-                        class="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer disabled:cursor-not-allowed"
-                      />
-                      <span class="text-xs text-gray-600 dark:text-gray-400">Penilai</span>
-                      <span v-if="getPenilaiDataTims(user.role).length" class="text-xs text-orange-600 dark:text-orange-400 font-medium">
-                        ({{ getPenilaiDataTims(user.role).join(', ') }})
-                      </span>
-                    </label>
-                  </div>
+                    </div>
+                    <div class="text-xs text-gray-400 text-center mt-0.5 italic">dari jabatan</div>
+                  </template>
+                  <!-- Jabatan kosong → hanya PJ Data checkbox yang aktif -->
+                  <template v-else>
+                    <div class="flex items-center justify-center">
+                      <label class="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          :checked="user.role.startsWith('PJ Data') || pjDataModal?.user.id === user.id"
+                          @change="handlePjDataCheckbox(user)"
+                          class="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                        />
+                        <span class="text-xs text-gray-600 dark:text-gray-400">PJ Data</span>
+                        <span v-if="getPjDataTims(user.role).length" class="text-xs text-teal-600 dark:text-teal-400 font-medium">
+                          ({{ getPjDataTims(user.role).join(', ') }})
+                        </span>
+                      </label>
+                    </div>
+                  </template>
                 </template>
                 <span v-else-if="!user.kode_unit && user.role === 'staf'" class="text-xs text-gray-400 block text-center italic" title="Assign unit terlebih dahulu">Perlu unit</span>
                 <span v-else class="text-xs text-gray-400 block text-center">-</span>
@@ -567,7 +645,7 @@ function submitDelete() {
               </td>
             </tr>
             <tr v-if="paginatedUsers.length === 0">
-              <td colspan="8" class="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
+              <td colspan="9" class="px-4 py-8 text-center text-gray-500 dark:text-gray-400">
                 {{ searchQuery ? 'Tidak ada data yang cocok' : 'Belum ada data pegawai' }}
               </td>
             </tr>
@@ -628,11 +706,11 @@ function submitDelete() {
               <span class="col-span-2">
                 <span class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium"
                   :class="{
-                    'bg-purple-100 text-purple-700': viewItem.role === 'admin_mutu',
-                    'bg-blue-100 text-blue-700': viewItem.role === 'kepala_unit',
-                    'bg-teal-100 text-teal-700': viewItem.role.startsWith('PJ Data'),
-                    'bg-gray-100 text-gray-700': viewItem.role === 'staf',
-                    'bg-orange-100 text-orange-700': viewItem.role === 'penilai_pj_data',
+                    'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300': viewItem.role === 'admin_mutu',
+                    'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300': viewItem.role === 'kepala_unit',
+                    'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300': viewItem.role === 'staf',
+                    'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300': viewItem.role.startsWith('PJ Data'),
+                    'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300': isPenilaiRole(viewItem.role),
                   }">
                   {{ getRoleDisplay(viewItem.role) }}
                 </span>
@@ -644,10 +722,14 @@ function submitDelete() {
             </div>
             <div class="grid grid-cols-3 gap-2 text-sm">
               <span class="font-medium text-gray-600 dark:text-gray-400">Jabatan</span>
-              <span class="col-span-2 dark:text-gray-100">{{ viewItem.status_pegawai || '-' }}</span>
+              <span class="col-span-2 dark:text-gray-100">{{ viewItem.jabatan || '-' }}</span>
             </div>
             <div class="grid grid-cols-3 gap-2 text-sm">
               <span class="font-medium text-gray-600 dark:text-gray-400">Status Pegawai</span>
+              <span class="col-span-2 dark:text-gray-100">{{ viewItem.status_pegawai || '-' }}</span>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-sm">
+              <span class="font-medium text-gray-600 dark:text-gray-400">Status Kepegawaian</span>
               <span class="col-span-2">
                 <span v-if="viewItem.status_kerja" class="inline-block rounded-full px-2.5 py-0.5 text-xs font-medium" :class="statusKerjaBadge[viewItem.status_kerja] ?? 'bg-gray-100 text-gray-700'">
                   {{ viewItem.status_kerja }}
@@ -672,7 +754,7 @@ function submitDelete() {
     <!-- ===== MODAL ADD ===== -->
     <Teleport to="body">
       <div v-if="showAdd" class="fixed inset-0 z-[9999] grid place-items-center bg-black/40 p-4" @click.self="showAdd = false">
-        <div class="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl dark:bg-gray-900 max-h-[90vh] overflow-y-auto">
+        <div class="w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl dark:bg-gray-900 max-h-[90vh] overflow-y-auto">
           <div class="flex items-center justify-between mb-4">
             <h4 class="text-lg font-semibold dark:text-gray-100">Tambah Pegawai</h4>
             <button @click="showAdd = false" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
@@ -700,30 +782,43 @@ function submitDelete() {
               <span v-if="addErrors.password" class="text-xs text-red-500 mt-1">{{ addErrors.password }}</span>
             </label>
 
-            <!-- Peran -->
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">Peran <span class="text-red-500">*</span></span>
-              <select v-model="formAdd.base_role" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                <option value="" disabled>Pilih Peran...</option>
-                <option value="admin_mutu">Admin Mutu</option>
-                <option value="kepala_unit">Kepala Unit</option>
-                <option value="staf">Staf</option>
-              </select>
-              <span v-if="addErrors.base_role" class="text-xs text-red-500 mt-1">{{ addErrors.base_role }}</span>
-            </label>
+            <!-- Peran & Jabatan (side by side) -->
+            <div class="grid grid-cols-2 gap-4">
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Peran <span class="text-red-500">*</span></span>
+                <select v-model="formAdd.base_role" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                  <option value="" disabled>Pilih Peran...</option>
+                  <option value="admin_mutu">Admin Mutu</option>
+                  <option value="kepala_unit">Kepala Unit</option>
+                  <option value="staf">Staf</option>
+                </select>
+                <span v-if="addErrors.base_role" class="text-xs text-red-500 mt-1">{{ addErrors.base_role }}</span>
+              </label>
 
-            <!-- Jabatan (tipe kepegawaian) -->
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">Jabatan</span>
-              <select v-model="formAdd.status_pegawai" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                <option value="">Pilih Jabatan...</option>
-                <option v-for="opt in jabatanOptions" :key="opt" :value="opt">{{ opt }}</option>
-              </select>
-            </label>
+              <!-- Jabatan (posisi koordinator) -->
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Jabatan</span>
+                <select v-model="formAdd.jabatan" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                  <option value="">Pilih Jabatan...</option>
+                  <optgroup v-for="group in jabatanGroups" :key="group.label" :label="group.label">
+                    <option v-for="opt in group.options" :key="opt" :value="opt">{{ opt }}</option>
+                  </optgroup>
+                </select>
+              </label>
+            </div>
 
-            <!-- Status Pegawai (aktif/resign/dll) -->
+            <!-- Status Pegawai (tipe kepegawaian: PNS, PPPK, dll) -->
             <label class="block text-sm">
               <span class="mb-1 block font-medium dark:text-gray-200">Status Pegawai</span>
+              <select v-model="formAdd.status_pegawai" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                <option value="">Pilih Status Pegawai...</option>
+                <option v-for="opt in statusPegawaiOptions" :key="opt" :value="opt">{{ opt }}</option>
+              </select>
+            </label>
+
+            <!-- Status Kepegawaian (Aktif/Resign/dll) -->
+            <label class="block text-sm">
+              <span class="mb-1 block font-medium dark:text-gray-200">Status Kepegawaian</span>
               <select v-model="formAdd.status_kerja" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
                 <option value="">Pilih Status...</option>
                 <option v-for="opt in statusKerjaOptions" :key="opt" :value="opt">{{ opt }}</option>
@@ -739,30 +834,42 @@ function submitDelete() {
               </select>
             </label>
 
-            <!-- PJ Data / Penilai PJ Data section (hanya staf + unit dipilih) -->
-            <div v-if="formAdd.base_role === 'staf' && formAdd.kode_unit" class="rounded-lg border border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-900/20 p-3 space-y-2">
-              <!-- PJ Data checkbox -->
-              <label class="flex items-center gap-2 cursor-pointer" :class="formAdd.is_penilai_pj_data ? 'opacity-40 pointer-events-none' : ''">
-                <input type="checkbox" v-model="formAdd.is_pj_data" :disabled="formAdd.is_penilai_pj_data" class="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
-                <span class="text-sm font-medium text-teal-800 dark:text-teal-300">PJ Data</span>
-                <span class="text-xs text-teal-600 dark:text-teal-400">(dapat mengisi capaian indikator)</span>
-              </label>
-              <div v-if="formAdd.is_pj_data && getTimsForUnit(formAdd.kode_unit).length > 0" class="mt-1 ml-6">
-                <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Pilih Tim <span class="text-gray-400">(maks. 2)</span></p>
-                <div v-for="tim in getTimsForUnit(formAdd.kode_unit)" :key="tim.id" class="flex items-center gap-2 mb-1.5">
-                  <input type="checkbox" :value="tim.nama_tim" v-model="selectedAddTims" @change="onAddTimChange" class="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
-                  <span class="text-sm text-gray-700 dark:text-gray-300">{{ tim.nama_tim }}</span>
+            <!-- PJ Data / Penilai section (hanya staf + unit dipilih) -->
+            <div v-if="formAdd.base_role === 'staf' && formAdd.kode_unit" class="rounded-lg border p-3 space-y-2"
+              :class="formAdd.jabatan ? 'border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-900/20' : 'border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-900/20'"
+            >
+              <!-- Jabatan terisi → otomatis Penilai PJ Data -->
+              <template v-if="formAdd.jabatan">
+                <div class="flex items-center gap-2">
+                  <span class="inline-flex items-center gap-1 rounded-full bg-orange-200 text-orange-800 dark:bg-orange-800/40 dark:text-orange-300 px-2.5 py-0.5 text-xs font-semibold">Penilai PJ Data (otomatis)</span>
                 </div>
-                <p v-if="addTimError" class="text-xs text-red-500 mt-1">{{ addTimError }}</p>
-              </div>
-              <!-- Divider -->
-              <div class="border-t border-teal-200 dark:border-teal-700"></div>
-              <!-- Penilai PJ Data checkbox -->
-              <label class="flex items-center gap-2 cursor-pointer" :class="formAdd.is_pj_data ? 'opacity-40 pointer-events-none' : ''">
-                <input type="checkbox" v-model="formAdd.is_penilai_pj_data" :disabled="formAdd.is_pj_data" class="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
-                <span class="text-sm font-medium text-orange-800 dark:text-orange-300">Penilai PJ Data</span>
-                <span class="text-xs text-orange-600 dark:text-orange-400">(dapat menilai, tidak bisa approve)</span>
-              </label>
+                <p class="text-xs text-orange-700 dark:text-orange-400">Jabatan koordinator terisi → role Penilai PJ Data otomatis ditetapkan saat disimpan.</p>
+                <!-- Tim Penilai (wajib jika unit punya tim) -->
+                <div v-if="getTimsForUnit(formAdd.kode_unit).length > 0" class="mt-2">
+                  <p class="text-xs font-medium text-orange-800 dark:text-orange-300 mb-1.5">Tim yang dinilai <span class="text-red-500">*</span></p>
+                  <div v-for="tim in getTimsForUnit(formAdd.kode_unit)" :key="tim.id" class="flex items-center gap-2 mb-1.5">
+                    <input type="radio" :value="tim.nama_tim" v-model="selectedAddPenilaiTim" class="h-4 w-4 border-gray-300 text-orange-600 focus:ring-orange-500" />
+                    <span class="text-sm text-gray-700 dark:text-gray-300">{{ tim.nama_tim }}</span>
+                  </div>
+                </div>
+              </template>
+              <!-- Jabatan kosong → hanya PJ Data checkbox -->
+              <template v-else>
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" v-model="formAdd.is_pj_data" class="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
+                  <span class="text-sm font-medium text-teal-800 dark:text-teal-300">PJ Data</span>
+                  <span class="text-xs text-teal-600 dark:text-teal-400">(dapat mengisi capaian indikator)</span>
+                </label>
+                <div v-if="formAdd.is_pj_data && getTimsForUnit(formAdd.kode_unit).length > 0" class="mt-1 ml-6">
+                  <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-2">Pilih Tim <span class="text-gray-400">(maks. 2)</span></p>
+                  <div v-for="tim in getTimsForUnit(formAdd.kode_unit)" :key="tim.id" class="flex items-center gap-2 mb-1.5">
+                    <input type="checkbox" :value="tim.nama_tim" v-model="selectedAddTims" @change="onAddTimChange" class="h-4 w-4 rounded border-gray-300 text-teal-600 focus:ring-teal-500" />
+                    <span class="text-sm text-gray-700 dark:text-gray-300">{{ tim.nama_tim }}</span>
+                  </div>
+                  <p v-if="addTimError" class="text-xs text-red-500 mt-1">{{ addTimError }}</p>
+                </div>
+                <p class="text-xs text-gray-400 dark:text-gray-500 italic">Isi jabatan koordinator agar bisa menjadi Penilai PJ Data.</p>
+              </template>
             </div>
           </div>
 
@@ -781,24 +888,26 @@ function submitDelete() {
     <!-- ===== MODAL EDIT (tanpa PJ Data section) ===== -->
     <Teleport to="body">
       <div v-if="showEdit" class="fixed inset-0 z-[9999] grid place-items-center bg-black/40 p-4" @click.self="showEdit = false">
-        <div class="w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl dark:bg-gray-900 max-h-[90vh] overflow-y-auto">
+        <div class="w-full max-w-2xl rounded-xl bg-white p-6 shadow-2xl dark:bg-gray-900 max-h-[90vh] overflow-y-auto">
           <div class="flex items-center justify-between mb-4">
             <h4 class="text-lg font-semibold dark:text-gray-100">Edit Pegawai</h4>
             <button @click="showEdit = false" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
           </div>
 
           <div class="space-y-4">
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">Nama <span class="text-red-500">*</span></span>
-              <input v-model="formEdit.name" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" />
-              <span v-if="editErrors.name" class="text-xs text-red-500 mt-1">{{ editErrors.name }}</span>
-            </label>
-
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">NIP</span>
-              <input v-model="formEdit.nip" type="text" placeholder="Nomor Induk Pegawai" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" />
-              <span v-if="editErrors.nip" class="text-xs text-red-500 mt-1">{{ editErrors.nip }}</span>
-            </label>
+            <!-- Nama & NIP -->
+            <div class="grid grid-cols-2 gap-4">
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Nama <span class="text-red-500">*</span></span>
+                <input v-model="formEdit.name" type="text" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" />
+                <span v-if="editErrors.name" class="text-xs text-red-500 mt-1">{{ editErrors.name }}</span>
+              </label>
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">NIP</span>
+                <input v-model="formEdit.nip" type="text" placeholder="Nomor Induk Pegawai" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100" />
+                <span v-if="editErrors.nip" class="text-xs text-red-500 mt-1">{{ editErrors.nip }}</span>
+              </label>
+            </div>
 
             <label class="block text-sm">
               <span class="mb-1 block font-medium dark:text-gray-200">Password <span class="text-gray-400 text-xs">(kosongkan jika tidak diubah)</span></span>
@@ -806,34 +915,51 @@ function submitDelete() {
               <span v-if="editErrors.password" class="text-xs text-red-500 mt-1">{{ editErrors.password }}</span>
             </label>
 
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">Peran <span class="text-red-500">*</span></span>
-              <select v-model="formEdit.base_role" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                <option value="" disabled>Pilih Peran...</option>
-                <option value="admin_mutu">Admin Mutu</option>
-                <option value="kepala_unit">Kepala Unit</option>
-                <option value="staf">Staf</option>
-              </select>
-              <span v-if="editErrors.base_role" class="text-xs text-red-500 mt-1">{{ editErrors.base_role }}</span>
-            </label>
+            <!-- Peran & Jabatan (side by side) -->
+            <div class="grid grid-cols-2 gap-4">
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Peran <span class="text-red-500">*</span></span>
+                <select v-model="formEdit.base_role" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                  <option value="" disabled>Pilih Peran...</option>
+                  <option value="admin_mutu">Admin Mutu</option>
+                  <option value="kepala_unit">Kepala Unit</option>
+                  <option value="staf">Staf</option>
+                </select>
+                <span v-if="editErrors.base_role" class="text-xs text-red-500 mt-1">{{ editErrors.base_role }}</span>
+              </label>
 
-            <!-- Jabatan (tipe kepegawaian) -->
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">Jabatan</span>
-              <select v-model="formEdit.status_pegawai" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                <option value="">Pilih Jabatan...</option>
-                <option v-for="opt in jabatanOptions" :key="opt" :value="opt">{{ opt }}</option>
-              </select>
-            </label>
+              <!-- Jabatan (posisi koordinator) -->
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Jabatan</span>
+                <select v-model="formEdit.jabatan" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                  <option value="">Pilih Jabatan...</option>
+                  <optgroup v-for="group in jabatanGroups" :key="group.label" :label="group.label">
+                    <option v-for="opt in group.options" :key="opt" :value="opt">{{ opt }}</option>
+                  </optgroup>
+                </select>
+              </label>
+            </div>
 
-            <!-- Status Pegawai (aktif/resign/dll) -->
-            <label class="block text-sm">
-              <span class="mb-1 block font-medium dark:text-gray-200">Status Pegawai</span>
-              <select v-model="formEdit.status_kerja" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
-                <option value="">Pilih Status...</option>
-                <option v-for="opt in statusKerjaOptions" :key="opt" :value="opt">{{ opt }}</option>
-              </select>
-            </label>
+            <!-- Status Pegawai & Status Kepegawaian -->
+            <div class="grid grid-cols-2 gap-4">
+              <!-- Status Pegawai (tipe kepegawaian: PNS, PPPK, dll) -->
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Status Pegawai</span>
+                <select v-model="formEdit.status_pegawai" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                  <option value="">Pilih Status Pegawai...</option>
+                  <option v-for="opt in statusPegawaiOptions" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+              </label>
+
+              <!-- Status Kepegawaian (Aktif/Resign/dll) -->
+              <label class="block text-sm">
+                <span class="mb-1 block font-medium dark:text-gray-200">Status Kepegawaian</span>
+                <select v-model="formEdit.status_kerja" class="w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100">
+                  <option value="">Pilih Status...</option>
+                  <option v-for="opt in statusKerjaOptions" :key="opt" :value="opt">{{ opt }}</option>
+                </select>
+              </label>
+            </div>
 
             <label class="block text-sm">
               <span class="mb-1 block font-medium dark:text-gray-200">Unit</span>
@@ -843,16 +969,24 @@ function submitDelete() {
               </select>
             </label>
 
-            <!-- Info PJ Data (read-only) -->
-            <div v-if="formEdit.is_pj_data" class="rounded-lg border border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-900/20 px-3 py-2">
+            <!-- Info otomatis: jabatan terisi → Penilai PJ Data -->
+            <div v-if="formEdit.jabatan" class="rounded-lg border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-900/20 px-3 py-2 space-y-2">
+              <span class="text-xs text-orange-700 dark:text-orange-300">
+                Jabatan koordinator terisi → pegawai ini akan <strong>otomatis menjadi Penilai PJ Data</strong> saat disimpan.
+              </span>
+              <!-- Tim Penilai (jika unit punya tim) -->
+              <div v-if="formEdit.kode_unit && getTimsForUnit(formEdit.kode_unit).length > 0">
+                <p class="text-xs font-medium text-orange-800 dark:text-orange-300 mb-1.5">Tim yang dinilai <span class="text-red-500">*</span></p>
+                <div v-for="tim in getTimsForUnit(formEdit.kode_unit)" :key="tim.id" class="flex items-center gap-2 mb-1.5">
+                  <input type="radio" :value="tim.nama_tim" v-model="formEdit.pj_data_tim" class="h-4 w-4 border-gray-300 text-orange-600 focus:ring-orange-500" />
+                  <span class="text-sm text-gray-700 dark:text-gray-300">{{ tim.nama_tim }}</span>
+                </div>
+              </div>
+            </div>
+            <!-- Info PJ Data (hanya jika jabatan kosong) -->
+            <div v-else-if="formEdit.is_pj_data" class="rounded-lg border border-teal-200 bg-teal-50 dark:border-teal-800 dark:bg-teal-900/20 px-3 py-2">
               <span class="text-xs text-teal-700 dark:text-teal-300">
                 Pegawai ini berstatus <strong>PJ Data</strong>. Ubah via kolom PJ Data di tabel.
-              </span>
-            </div>
-            <!-- Info Penilai PJ Data (read-only) -->
-            <div v-if="formEdit.is_penilai_pj_data" class="rounded-lg border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-900/20 px-3 py-2">
-              <span class="text-xs text-orange-700 dark:text-orange-300">
-                Pegawai ini berstatus <strong>Penilai PJ Data</strong> (dapat menilai, tidak bisa approve).
               </span>
             </div>
           </div>

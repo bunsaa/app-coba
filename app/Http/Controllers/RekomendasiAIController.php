@@ -77,7 +77,7 @@ PROMPT;
             $response = Http::withHeaders([
                 'Authorization' => 'Bearer ' . $apiKey,
             ])->asJson()->timeout(30)->post('https://api.groq.com/openai/v1/chat/completions', [
-                'model'      => 'llama-3.3-70b-versatile',
+                'model'      => 'openai/gpt-oss-120b',
                 'max_tokens' => 1024,
                 'messages'   => [
                     ['role' => 'user', 'content' => $prompt],

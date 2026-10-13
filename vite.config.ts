@@ -5,6 +5,9 @@ import laravel from 'laravel-vite-plugin';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+    server: {
+        port: 5173,
+    },
     plugins: [
         laravel({
             input: ['resources/js/app.ts', 'resources/js/pages/Capaian-Indikator.vue'],

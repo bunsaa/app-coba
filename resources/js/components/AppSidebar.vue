@@ -20,17 +20,22 @@ import {
   LayoutDashboardIcon,
   SearchCheckIcon,
   UsersIcon,
+  FileTextIcon,
 } from 'lucide-vue-next';
 import { ref, computed } from 'vue';
 import AppLogo from './AppLogo.vue';
 
 const openDashboard = ref(true);
+const openIndikator = ref(true);
 
 const page = usePage();
 const currentPath = computed(() => page?.url || '');
 
 const user = computed(() => page.props.auth?.user);
 const isAdmin = computed(() => user.value?.role === 'admin_mutu');
+const isKepalaUnit = computed(() => user.value?.role === 'kepala_unit');
+const isPenilaiPjData = computed(() => user.value?.role?.startsWith('penilai_pj_data') ?? false);
+const canAccessPengajuan = computed(() => isAdmin.value || isKepalaUnit.value || isPenilaiPjData.value);
 
 const modeAkses = computed(() => (page.props as any).modeAkses);
 const isMutuMode = computed(() => modeAkses.value === 'mutu');
@@ -89,17 +94,43 @@ const footerNavItems: never[] = [];
                   </Link>
                 </SidebarMenuButton>
 
-                <SidebarMenuButton v-if="isAdmin" as-child>
-                  <Link
-                    href="/indikator"
-                    class="flex items-center gap-2"
-                    :class="currentPath.startsWith('/indikator') ? 'bg-accent/50 text-foreground rounded-md' : ''"
+                <!-- Indikator group: directly below Dashboard -->
+                <div v-if="isAdmin || canAccessPengajuan">
+                  <button
+                    type="button"
+                    @click="openIndikator = !openIndikator"
+                    class="w-full flex items-center gap-2 px-2 py-1.5 text-sm rounded-md hover:bg-accent/30 text-sidebar-foreground/80"
                   >
-                    <ChartColumnIncreasingIcon :size="16" />
-                    <span>Indikator</span>
-                  </Link>
-                </SidebarMenuButton>
+                    <ChartColumnIncreasingIcon :size="15" />
+                    <span class="flex-1 text-left">Indikator</span>
+                    <ChevronDown :size="13" class="transition-transform" :class="openIndikator ? 'rotate-180' : ''" />
+                  </button>
+                  <div v-show="openIndikator" class="mt-0.5 ml-4 space-y-0.5">
+                    <SidebarMenuButton v-if="isAdmin" as-child>
+                      <Link
+                        href="/indikator"
+                        class="flex items-center gap-2 text-[13px]"
+                        :class="currentPath === '/indikator' ? 'bg-accent/50 text-foreground rounded-md' : ''"
+                      >
+                        <ChartColumnIncreasingIcon :size="14" />
+                        <span>Kelola Indikator</span>
+                      </Link>
+                    </SidebarMenuButton>
 
+                    <SidebarMenuButton v-if="canAccessPengajuan" as-child>
+                      <Link
+                        href="/pengajuan-indikator"
+                        class="flex items-center gap-2 text-[13px]"
+                        :class="currentPath.startsWith('/pengajuan-indikator') ? 'bg-accent/50 text-foreground rounded-md' : ''"
+                      >
+                        <FileTextIcon :size="14" />
+                        <span>Pengajuan Indikator</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </div>
+                </div>
+
+                <!-- Capaian Indikator — standalone (non-admin), below Indikator group -->
                 <SidebarMenuButton v-if="!isAdmin" as-child>
                   <Link
                     href="/capaian-indikator"
@@ -111,6 +142,7 @@ const footerNavItems: never[] = [];
                   </Link>
                 </SidebarMenuButton>
 
+                <!-- Verifikasi Capaian — standalone (admin) -->
                 <SidebarMenuButton v-if="isAdmin" as-child>
                   <Link
                     href="/verifikasi-capaian-indikator"

@@ -13,6 +13,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Storage;
 use Carbon\Carbon;
 use App\Services\RekomendasiService;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class CapaianIndikatorController extends Controller
 {
@@ -24,6 +25,11 @@ class CapaianIndikatorController extends Controller
         $isAdminMutu = $user->role === 'admin_mutu' || $user->email === 'admin@mutu.rsud.go.id';
         $isKepalaUnit = $user->role === 'kepala_unit';
         $isPjData = str_starts_with($user->role ?? '', 'PJ Data - ');
+        $isPenilaiPjData = ($user->role ?? '') === 'penilai_pj_data' || str_starts_with($user->role ?? '', 'penilai_pj_data - ');
+        // Tim yang menjadi tanggung jawab penilai (dari suffix role, e.g. "penilai_pj_data - Tim X")
+        $penilaiTimName = str_starts_with($user->role ?? '', 'penilai_pj_data - ')
+            ? str_replace('penilai_pj_data - ', '', $user->role)
+            : null;
 
         // Get all units for dropdown
         $units = Units::with('tim_units')->orderBy('nama_unit', 'asc')->get();
@@ -55,7 +61,8 @@ class CapaianIndikatorController extends Controller
         $canApprove = $isAdminMutu || ($isKepalaUnit && $user->kode_unit === $selectedUnitCode);
 
         // Get selected tim unit (if any)
-        // PJ Data auto-select their own tim based on their role name
+        // PJ Data auto-selects their own tim based on their role name
+        // Penilai PJ Data does NOT auto-select tim — they start on the approval summary view
         $selectedTimUnit = $request->input('tim_unit', null);
         if (!$selectedTimUnit && $isPjData) {
             $selectedTimUnit = str_replace('PJ Data - ', '', $user->role);
@@ -211,6 +218,8 @@ class CapaianIndikatorController extends Controller
                     'analisisRtl' => $monthlyAnalisis,
                     'analisisRtlHistory' => $monthlyAnalisisHistory,
                     'rejectionHistory' => $capaian->rejection_history ?? [],
+                    'updated_by' => $capaian->updated_by ?? null,
+                    'updated_at' => $capaian->updated_at?->format('d/m/Y H:i') ?? null,
                 ];
             })->toArray();
         }
@@ -288,6 +297,13 @@ if ($selectedUnitCode) {
                     ->keyBy('nama_tim');
             }
 
+            // Pre-fetch validasi data indikator per-tim per-TW untuk tahun ini
+            $validasiMap = \App\Models\ValidasiDataIndikator::where('kode_unit', $selectedUnitCode)
+                ->where('tahun', $tahun)
+                ->whereNotNull('nama_tim')
+                ->get()
+                ->groupBy('nama_tim');
+
             // Pre-fetch ALL indikators for this unit's tims in ONE query (replaces N pluck queries)
             $allTimNames = $selectedUnit->tim_units->pluck('nama_tim')->toArray();
             $allIndikatorsByTim = Indikator::where('kode_unit', $selectedUnitCode)
@@ -313,6 +329,11 @@ if ($selectedUnitCode) {
             });
 
             foreach ($selectedUnit->tim_units as $tim) {
+                // Penilai PJ Data hanya boleh melihat tim yang menjadi tanggung jawabnya
+                if ($isPenilaiPjData && $penilaiTimName && $tim->nama_tim !== $penilaiTimName) {
+                    continue;
+                }
+
                 $timIndikators = $allIndikatorsByTim->get($tim->nama_tim, collect());
                 $timIndikatorIds = $timIndikators->pluck('id')->toArray();
                 $totalIndikator = count($timIndikatorIds);
@@ -404,6 +425,20 @@ if ($selectedUnitCode) {
                     }
 
                     $timPenilaian = $timPenilaianMap->get($tim->nama_tim);
+
+                    // Build validasi_status per TW (1-4)
+                    $timValidasiList = $validasiMap->get($tim->nama_tim, collect());
+                    $validasiStatus = [];
+                    for ($tw = 1; $tw <= 4; $tw++) {
+                        $vRec = $timValidasiList->firstWhere('triwulan', $tw);
+                        $validasiStatus[$tw] = [
+                            'is_required'  => $vRec ? (bool) $vRec->is_required : false,
+                            'is_submitted' => $vRec ? (bool) $vRec->is_submitted : false,
+                            'is_valid'     => $vRec ? $vRec->is_valid : null,
+                            'persentase'   => $vRec ? $vRec->persentase_kesesuaian : null,
+                        ];
+                    }
+
                     $timApprovalSummary[] = [
                         'nama_tim' => $tim->nama_tim,
                         'pj_data_nama' => $pjDataUserMap->get($tim->nama_tim) ?? null,
@@ -419,6 +454,7 @@ if ($selectedUnitCode) {
                         'penilaian_pj' => $timPenilaian
                             ? PenilaianPjDataController::formatPenilaian($timPenilaian)
                             : null,
+                        'validasi_status' => $validasiStatus,
                     ];
                 }
             }
@@ -437,6 +473,10 @@ if ($selectedUnitCode) {
             if ($isPjData) {
                 $pjDataTimName = str_replace('PJ Data - ', '', $user->role);
                 $penilaianQuery->where('nama_tim', $pjDataTimName);
+            }
+            // Penilai PJ Data juga hanya melihat penilaian untuk tim yang menjadi tanggung jawabnya
+            if ($isPenilaiPjData && $penilaiTimName) {
+                $penilaianQuery->where('nama_tim', $penilaiTimName);
             }
 
             $penilaianList = $penilaianQuery->get();
@@ -464,6 +504,7 @@ if ($selectedUnitCode) {
             'timApprovalSummary' => $timApprovalSummary,
             'viewMonth' => (int) $viewMonth,
             'penilaianPjData' => $penilaianPjData,
+            'currentUserId' => $user->id,
         ]);
     }
 
@@ -657,13 +698,15 @@ if ($selectedUnitCode) {
         ];
         $requestedMonth = $bulanMap[$validated['bulan']];
 
-        // VALIDASI: Hanya bisa input untuk tahun dan bulan berjalan
-        if ($validated['tahun'] != $currentYear || $requestedMonth != $currentMonth) {
+        $isAdminOrKepala = $isAdminMutu || $isKepalaUnit;
+
+        // VALIDASI: Hanya bisa input untuk tahun dan bulan berjalan (bypass untuk admin/kepala)
+        if (!$isAdminOrKepala && ($validated['tahun'] != $currentYear || $requestedMonth != $currentMonth)) {
             return response()->json(['error' => 'Analisis hanya bisa diedit pada bulan berjalan'], 422);
         }
 
-        // VALIDASI: Hanya bisa input tanggal 1-29
-        if ($currentDay > 29) {
+        // VALIDASI: Hanya bisa input tanggal 1-29 (bypass untuk admin/kepala)
+        if (!$isAdminOrKepala && $currentDay > 29) {
             return response()->json(['error' => 'Jadwal input capaian indikator sudah ditutup'], 403);
         }
 
@@ -673,8 +716,11 @@ if ($selectedUnitCode) {
             return response()->json(['error' => 'Bulan ini sudah divalidasi, tidak dapat diubah'], 422);
         }
         if ($capaian->{$bulan . '_approved'}) {
-            // Jika ada komentar admin, izinkan re-edit dan reset approval
-            if ($capaian->{$bulan . '_komentar'}) {
+            // Admin/kepala boleh edit walau sudah approved
+            if ($isAdminOrKepala) {
+                // allow — no block
+            } elseif ($capaian->{$bulan . '_komentar'}) {
+                // Jika ada komentar admin, izinkan re-edit dan reset approval
                 $capaian->{$bulan . '_approved'} = false;
             } else {
                 return response()->json(['error' => 'Bulan ini sudah di-approve, analisis/RTL tidak dapat diubah'], 422);
@@ -796,7 +842,19 @@ if ($selectedUnitCode) {
         $timUnit = $indikator->tim_unit ? str_replace([' ', ',', '&', '/', '\\'], '_', $indikator->tim_unit) : 'NoTim';
         $fileName = "{$indikatorCode}_{$timUnit}_{$bulan}_{$validated['tahun']}.{$extension}";
 
+        // Pastikan direktori ada (penting untuk hosting)
+        Storage::disk('public')->makeDirectory('lampiran_capaian');
+
         $filePath = $file->storeAs('lampiran_capaian', $fileName, 'public');
+
+        if (!$filePath) {
+            \Log::error('Upload lampiran gagal: storeAs returned false', [
+                'indikator_id' => $validated['indikator_id'],
+                'fileName' => $fileName,
+                'storage_path' => storage_path('app/public/lampiran_capaian'),
+            ]);
+            return response()->json(['error' => 'Gagal menyimpan file. Pastikan folder storage/app/public dapat ditulis (writable).'], 500);
+        }
 
         $lampiran = CapaianLampiran::create([
             'capaian_id' => $capaian->id,
@@ -1465,5 +1523,122 @@ if ($selectedUnitCode) {
             'success' => true,
             'updated' => $updated
         ]);
+    }
+
+    // =========================================================
+    // DOWNLOAD LAPORAN PDF PEMANTAUAN INDIKATOR MUTU
+    // =========================================================
+    public function downloadLaporan(Request $request)
+    {
+        $user   = auth()->user();
+        $bulan  = (int) $request->input('bulan', Carbon::now()->month);
+        $tahun  = (int) $request->input('tahun',  Carbon::now()->year);
+
+        // Determine kode_unit & tim_unit from request (admin can specify) or from user
+        $isAdmin = $user->role === 'admin_mutu';
+        $kodeUnit = $request->input('kode_unit')
+            ?? $user->kode_unit
+            ?? null;
+
+        // Tim unit: from request, or from user role "penilai_pj_data - {tim}" / "PJ Data - {tim}"
+        $timUnit = $request->input('tim_unit');
+        if (!$timUnit) {
+            if (str_starts_with($user->role ?? '', 'penilai_pj_data - ')) {
+                $timUnit = str_replace('penilai_pj_data - ', '', $user->role);
+            } elseif (str_starts_with($user->role ?? '', 'PJ Data - ')) {
+                $timUnit = str_replace('PJ Data - ', '', $user->role);
+            }
+        }
+
+        if (!$kodeUnit) {
+            abort(400, 'Unit tidak ditemukan.');
+        }
+
+        // Map numeric month to field prefix
+        $bulanMap = [
+            1=>'jan',2=>'feb',3=>'mar',4=>'apr',5=>'may',6=>'jun',
+            7=>'jul',8=>'aug',9=>'sep',10=>'oct',11=>'nov',12=>'des',
+        ];
+        $bulanField = $bulanMap[$bulan] ?? 'jan';
+        $quarter    = (int) ceil($bulan / 3);
+
+        // Load active indikators for this unit/tim
+        $query = Indikator::where('kode_unit', $kodeUnit)
+            ->where('is_active', true)
+            ->where(function ($q) use ($quarter) {
+                $q->whereNull('berlaku_tw')->orWhereJsonContains('berlaku_tw', $quarter);
+            })
+            ->orderByRaw("FIELD(jenis_indikator,'INM','SPM','PRIORITAS','IMUT_RS','IMUT_UNIT')")
+            ->orderBy('indikator');
+
+        if ($timUnit) {
+            $query->where('tim_unit', $timUnit);
+        }
+
+        $indikators = $query->with(['capaian' => function ($q) use ($tahun, $kodeUnit) {
+            $q->where('tahun', $tahun)->where('kode_unit', $kodeUnit);
+        }])->get();
+
+        // Build rows
+        $rows = $indikators->map(function ($ind) use ($bulanField, $quarter) {
+            $capaian = $ind->capaian->first();
+            $n = $capaian ? $capaian->{$bulanField . '_n'} : null;
+            $d = $capaian ? $capaian->{$bulanField . '_d'} : null;
+
+            $capaianPct = '-';
+            $tercapai   = false;
+            if ($n !== null && $d !== null && (float)$d > 0) {
+                $pct = round((float)$n / (float)$d * 100, 1);
+                $capaianPct = $pct . '%';
+                // Compare with standar for this TW
+                $standarTw = $ind->{"standar_tw{$quarter}"} ?? $ind->standar ?? null;
+                if ($standarTw !== null && $standarTw !== '') {
+                    $tercapai = $pct >= (float) $standarTw;
+                }
+            }
+
+            $standarTw = $ind->{"standar_tw{$quarter}"} ?? $ind->standar ?? '-';
+
+            return [
+                'indikator' => $ind->indikator,
+                'n'         => $n ?? '-',
+                'd'         => $d ?? '-',
+                'capaian'   => $capaianPct,
+                'standar'   => $standarTw,
+                'tercapai'  => $tercapai,
+                'analisa'   => $capaian ? ($capaian->{$bulanField . '_analisis'} ?? '') : '',
+                'rtl'       => $capaian ? ($capaian->{$bulanField . '_rtl'} ?? '') : '',
+            ];
+        })->toArray();
+
+        // Unit & tim names
+        $unit     = Units::where('kode_unit', $kodeUnit)->first();
+        $namaUnit = $unit?->nama_unit ?? $kodeUnit;
+
+        // Kepala unit
+        $kepalaUnit = User::where('role', 'kepala_unit')
+            ->where('kode_unit', $kodeUnit)
+            ->value('name');
+
+        // Period label
+        $bulanNama = Carbon::create($tahun, $bulan)->locale('id')->translatedFormat('F Y');
+        $periodeLabel = "Bulan {$bulanNama} (TW {$quarter})";
+
+        $data = [
+            'rows'         => $rows,
+            'namaUnit'     => $namaUnit,
+            'namaTimUnit'  => $timUnit,
+            'periodeLabel' => $periodeLabel,
+            'tanggalCetak' => Carbon::now()->locale('id')->translatedFormat('d F Y'),
+            'dicetakOleh'  => $user->name,
+            'kepalaUnit'   => $kepalaUnit,
+        ];
+
+        $pdf = Pdf::loadView('laporan.pemantauan', $data)
+            ->setPaper('A4', 'portrait');
+
+        $filename = 'Laporan-Pemantauan-' . str_replace(' ', '-', $namaUnit) . '-' . $bulanNama . '.pdf';
+
+        return $pdf->download($filename);
     }
 }

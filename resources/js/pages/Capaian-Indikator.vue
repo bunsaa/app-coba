@@ -75,6 +75,7 @@ interface TimApprovalSummary {
   by_jenis_not_approved?: Record<string, number>;
   has_penilai?: boolean;
   penilaian_pj?: PenilaianPjDetail | null;
+  validasi_status?: Record<number, { is_required: boolean; is_submitted: boolean; is_valid: boolean | null; persentase: number | null }>;
 }
 
 interface Rekomendasi {
@@ -144,6 +145,7 @@ interface Props {
     nama_tim?: string | null;
     updated_at?: string | null;
   }>;
+  currentUserId: number;
 }
 
 const props = defineProps<Props>();
@@ -195,6 +197,8 @@ type Indicator = {
   analisisRtl: Record<MonthKey, MonthAnalisisRtl>;
   analisisRtlHistory: Record<MonthKey, AnalisisHistoryEntry[]>;
   rejectionHistory: RejectionHistoryEntry[];
+  updated_by: string | null;
+  updated_at: string | null;
 };
 
 /* ===== Util bulan & bulan berjalan ===== */
@@ -316,6 +320,41 @@ const detailAnalisis = ref('');
 const detailRtl = ref('');
 const savingDetailAnalisis = ref(false);
 
+// ── Validasi Data Indikator ──────────────────────────────────────────────────
+const showValidasiModal = ref(false);
+const validasiModalTim  = ref('');
+const validasiModalTw   = ref(0);
+const validasiRecord    = ref<any>(null);
+const validasiLoading   = ref(false);
+const validasiSaving    = ref(false);
+const qrPj1             = ref('');
+const qrPj2             = ref('');
+// local copy of timApprovalSummary for reactive validasi_status updates
+const localTimApproval  = ref<typeof props.timApprovalSummary>(props.timApprovalSummary ? [...props.timApprovalSummary] : []);
+
+// Computed: can current user edit PJ1/PJ2 columns in validasi modal
+const canEditPj1 = computed(() => {
+  if (props.isAdmin) return true;
+  if (!isPjDataRole.value || !validasiRecord.value) return false;
+  const r = validasiRecord.value;
+  // Slot PJ1 free → can claim it
+  if (r.pj_data_1_id === null) return true;
+  // Already PJ1 → can update
+  if (r.pj_data_1_id === props.currentUserId) return true;
+  return false;
+});
+const canEditPj2 = computed(() => {
+  if (props.isAdmin) return true;
+  if (!isPjDataRole.value || !validasiRecord.value) return false;
+  const r = validasiRecord.value;
+  // PJ1 is taken by someone else and PJ2 slot is free → can claim PJ2
+  if (r.pj_data_1_id !== null && r.pj_data_1_id !== props.currentUserId && r.pj_data_2_id === null) return true;
+  // Already PJ2 → can update
+  if (r.pj_data_2_id === props.currentUserId) return true;
+  return false;
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Filter by jenis indikator
 const filterJenis = ref<string>('');
 const availableJenis = computed(() => {
@@ -394,6 +433,25 @@ const paginatedIndicators = computed(() => {
   const start = (currentPage.value - 1) * itemsPerPage;
   const end = start + itemsPerPage;
   return filteredIndicators.value.slice(start, end);
+});
+
+// "Last update by" — find most recently updated entry across ALL current indikators
+const lastUpdatedInfo = computed((): { name: string; time: string } | null => {
+  let latestTs = 0;
+  let latest: { name: string; time: string } | null = null;
+  for (const ind of filteredIndicators.value) {
+    if (ind.updated_by && ind.updated_at) {
+      // Parse "dd/MM/yyyy HH:mm" → timestamp for comparison
+      const p = ind.updated_at.split(' ');
+      const [d, m, y] = (p[0] ?? '').split('/');
+      const ts = new Date(`${y}-${m}-${d}T${p[1] ?? '00:00'}`).getTime();
+      if (!isNaN(ts) && ts > latestTs) {
+        latestTs = ts;
+        latest = { name: ind.updated_by, time: ind.updated_at };
+      }
+    }
+  }
+  return latest;
 });
 
 function goToPage(page: number) {
@@ -630,6 +688,30 @@ const hasTimUnits = computed(() => {
 const isPjDataRole = computed(() => (props.userRole ?? '').startsWith('PJ Data - '));
 const pjDataTimName = computed(() => isPjDataRole.value ? (props.userRole ?? '').replace('PJ Data - ', '') : '');
 
+// Validasi status untuk tim PJ Data yang sedang login
+const pjDataValidasiStatus = computed(() => {
+  if (!isPjDataRole.value || !pjDataTimName.value) return null;
+  const tim = localTimApproval.value.find((t: any) => t.nama_tim === pjDataTimName.value);
+  return (tim?.validasi_status ?? null) as Record<number, { is_required: boolean; is_submitted: boolean; is_valid: boolean | null; persentase: number | null }> | null;
+});
+
+// Cek apakah periode input validasi masih terbuka (s/d tgl 5 bulan setelah akhir TW)
+function isValidasiPeriodOpen(tw: number): boolean {
+  const twEndMonth = tw * 3; // TW1=3, TW2=6, TW3=9, TW4=12
+  let deadlineMonth = twEndMonth + 1;
+  let deadlineYear  = Number(props.tahun);
+  if (deadlineMonth > 12) { deadlineMonth = 1; deadlineYear++; }
+
+  const curYear  = Number(props.currentYear);
+  const curMonth = Number(props.currentMonth);
+  const curDay   = Number(props.currentDay);
+
+  if (curYear > deadlineYear) return false;
+  if (curYear === deadlineYear && curMonth > deadlineMonth) return false;
+  if (curYear === deadlineYear && curMonth === deadlineMonth && curDay > 5) return false;
+  return true;
+}
+
 // Computed: list tim units untuk dropdown
 // PJ Data hanya bisa melihat tim miliknya sendiri
 const availableTimUnits = computed(() => {
@@ -645,9 +727,9 @@ const isUnitSelected = computed(() => {
   return selectedUnitCode.value !== '';
 });
 
-// Computed: summary approval per tim
+// Computed: summary approval per tim (gunakan localTimApproval agar validasi_status reaktif)
 const timApprovalSummary = computed(() => {
-  let all = props.timApprovalSummary || [];
+  let all = localTimApproval.value.length > 0 ? localTimApproval.value : (props.timApprovalSummary || []);
   // Penilai PJ Data dengan tim tertentu → hanya tampilkan tim yang ditugaskan
   if (isPenilaianPjDataRole.value && penilaiAssignedTims.value.length > 0) {
     all = all.filter(tim => penilaiAssignedTims.value.includes(tim.nama_tim));
@@ -812,7 +894,13 @@ const quarterMonths: Record<number, MonthKey[]> = {
 const displayMonths = computed(() => quarterMonths[props.quarter]);
 
 // Check if Analisis/RTL editable - HANYA aktif di bulan berjalan
+// Admin/kepala (canApprove) bisa edit kapan saja
 function isAnalisisEditable(): boolean {
+  // Admin mutu & kepala unit tidak dibatasi tanggal/bulan
+  if (props.canApprove) {
+    return true;
+  }
+
   // PENTING: Konversi tahun ke number karena props.tahun bisa jadi string dari URL
   const tahunDipilih = Number(props.tahun);
   const tahunSekarang = Number(props.currentYear);
@@ -1032,7 +1120,20 @@ function isValidated(ind: Indicator, m: MonthKey){
   return !!(ind.v && ind.v[m] && ind.v[m].validated);
 }
 
+// Kembalikan true jika bulan m belum/melewati bulan yang sedang dilihat (viewMonth)
+// Digunakan untuk menyembunyikan data bulan yang belum tiba saat melihat bulan tertentu
+function isAfterViewMonth(m: MonthKey): boolean {
+  const monthNum = monthOrder.indexOf(m) + 1; // 1-12
+  const viewYear = Number(props.tahun);
+  const currYear = Number(props.currentYear);
+  const viewMth  = props.viewMonth || props.currentMonth;
+  if (viewYear < currYear) return false; // tahun lampau: tampilkan semua
+  if (viewYear > currYear) return true;  // tahun mendatang: sembunyikan semua
+  return monthNum > viewMth;
+}
+
 function displayVal(ind: Indicator, m: MonthKey, field: 'N'|'D'){
+  if (isAfterViewMonth(m)) return '—';
   return ind.m[m][field] == null ? '—' : String(ind.m[m][field]);
 }
 
@@ -1525,7 +1626,9 @@ async function applyRecToDetail(ind: TimIndikatorDetail | null) {
 
 // Save analisis/RTL dari modal detail (kepala unit)
 async function saveDetailAnalisis() {
-  if (!viewingIndicatorFullData.value || !isViewingCurrentMonth.value) return;
+  if (!viewingIndicatorFullData.value) return;
+  // Non-admin/kepala hanya bisa save di bulan berjalan
+  if (!props.canApprove && !isViewingCurrentMonth.value) return;
   savingDetailAnalisis.value = true;
   try {
     const resp = await axios.post('/capaian-indikator/analisis', {
@@ -1789,7 +1892,8 @@ function changeTimUnit(){
     unit: selectedUnitCode.value,
     tim_unit: selectedTimUnitRef.value,
     tahun: props.tahun,
-    quarter: props.quarter
+    quarter: props.quarter,
+    viewMonth: props.viewMonth || undefined,
   }, {
     preserveState: false,
     preserveScroll: false,
@@ -1835,7 +1939,8 @@ function goBackToUnit(){
   router.get('/capaian-indikator', {
     unit: selectedUnitCode.value,
     tahun: props.tahun,
-    quarter: props.quarter
+    quarter: props.quarter,
+    viewMonth: props.viewMonth || undefined,
   }, {
     preserveState: false,
     preserveScroll: false,
@@ -1846,6 +1951,276 @@ function goBackToUnit(){
 function goBackToApprovalTable() {
   showIndicatorTableForNoTim.value = false;
 }
+
+// ── Validasi Data Indikator ──────────────────────────────────────────────────
+
+async function openValidasiModal(namaTim: string, tw: number) {
+  // Cek deadline: PJ Data hanya bisa akses s/d tgl 5 bulan setelah akhir TW
+  if (!props.isAdmin && !isValidasiPeriodOpen(tw)) {
+    const twEndMonth = tw * 3;
+    let dlMonth = twEndMonth + 1;
+    let dlYear  = Number(props.tahun);
+    if (dlMonth > 12) { dlMonth = 1; dlYear++; }
+    const monthNames = ['','Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+    alert(`Periode validasi TW ${tw} sudah ditutup. Batas input: 5 ${monthNames[dlMonth]} ${dlYear}.`);
+    return;
+  }
+  validasiModalTim.value = namaTim;
+  validasiModalTw.value  = tw;
+  validasiRecord.value   = null;
+  qrPj1.value = '';
+  qrPj2.value = '';
+  showValidasiModal.value = true;
+  validasiLoading.value   = true;
+  try {
+    const resp = await axios.post('/validasi-data-indikator/get', {
+      kode_unit: selectedUnitCode.value,
+      nama_tim:  namaTim,
+      tahun:     props.tahun,
+      triwulan:  tw,
+    });
+    validasiRecord.value = resp.data.record;
+    await generateValidasiQR();
+  } catch (e) {
+    console.error('Error loading validasi:', e);
+  } finally {
+    validasiLoading.value = false;
+  }
+}
+
+function closeValidasiModal() {
+  showValidasiModal.value = false;
+  validasiRecord.value    = null;
+  qrPj1.value = '';
+  qrPj2.value = '';
+}
+
+async function toggleRequired(namaTim: string, tw: number) {
+  const idx = localTimApproval.value.findIndex(t => t.nama_tim === namaTim);
+  const cur = idx >= 0 ? (localTimApproval.value[idx].validasi_status?.[tw]?.is_required ?? false) : false;
+  try {
+    const resp = await axios.post('/validasi-data-indikator/set-required', {
+      kode_unit:   selectedUnitCode.value,
+      nama_tim:    namaTim,
+      tahun:       props.tahun,
+      triwulan:    tw,
+      is_required: !cur,
+    });
+    const rec = resp.data.record;
+    if (idx >= 0) {
+      const tim = { ...localTimApproval.value[idx] };
+      tim.validasi_status = {
+        ...(tim.validasi_status ?? {}),
+        [tw]: {
+          is_required:  rec.is_required,
+          is_submitted: rec.is_submitted,
+          is_valid:     rec.is_valid,
+          persentase:   rec.persentase_kesesuaian,
+        },
+      };
+      localTimApproval.value = [
+        ...localTimApproval.value.slice(0, idx),
+        tim,
+        ...localTimApproval.value.slice(idx + 1),
+      ];
+    }
+    // If just required, open the modal
+    if (!cur) {
+      openValidasiModal(namaTim, tw);
+    }
+  } catch (e) {
+    console.error('Error toggling required:', e);
+  }
+}
+
+async function saveValidasi(asPj: 1 | 2) {
+  if (!validasiRecord.value) return;
+  if (!props.isAdmin && !isValidasiPeriodOpen(validasiModalTw.value)) {
+    alert('Periode validasi sudah ditutup (batas tgl 5 bulan berikutnya).');
+    return;
+  }
+  const detail: any[] = validasiRecord.value.detail ?? [];
+  // Pick jawaban from the column the user is filling
+  const allJawaban = detail.map(r => ({
+    indikator_id: r.indikator_id,
+    jawaban: asPj === 2 ? (r.pj2_jawaban ?? 'D') : (r.pj1_jawaban ?? 'D'),
+  }));
+
+  validasiSaving.value = true;
+  try {
+    const resp = await axios.post('/validasi-data-indikator/save', {
+      kode_unit: selectedUnitCode.value,
+      nama_tim:  validasiModalTim.value,
+      tahun:     props.tahun,
+      triwulan:  validasiModalTw.value,
+      jawaban:   allJawaban,
+      as_pj:     props.isAdmin ? asPj : undefined,
+    });
+    validasiRecord.value = resp.data.record;
+    // Update local status
+    const idx = localTimApproval.value.findIndex(t => t.nama_tim === validasiModalTim.value);
+    const rec = resp.data.record;
+    if (idx >= 0) {
+      const tim = { ...localTimApproval.value[idx] };
+      tim.validasi_status = {
+        ...(tim.validasi_status ?? {}),
+        [validasiModalTw.value]: {
+          is_required:  rec.is_required,
+          is_submitted: rec.is_submitted,
+          is_valid:     rec.is_valid,
+          persentase:   rec.persentase_kesesuaian,
+        },
+      };
+      localTimApproval.value = [
+        ...localTimApproval.value.slice(0, idx),
+        tim,
+        ...localTimApproval.value.slice(idx + 1),
+      ];
+    }
+    await generateValidasiQR();
+  } catch (e: any) {
+    alert(e.response?.data?.error ?? 'Gagal menyimpan validasi');
+  } finally {
+    validasiSaving.value = false;
+  }
+}
+
+async function generateValidasiQR() {
+  const rec = validasiRecord.value;
+  if (!rec) return;
+  const fmtDate = (iso: string | null) => iso ? new Date(iso).toLocaleDateString('id-ID', {day:'2-digit',month:'long',year:'numeric'}) : '-';
+  if (rec.pj1_info && rec.pj1_submitted_at) {
+    const text = `Telah divalidasi oleh PJ Data ${rec.pj1_info.name} NIP: ${rec.pj1_info.nip ?? '-'} pada ${fmtDate(rec.pj1_submitted_at)}`;
+    qrPj1.value = await QRCode.toDataURL(text, { width: 128, margin: 1 });
+  }
+  if (rec.pj2_info && rec.pj2_submitted_at) {
+    const text = `Telah divalidasi oleh PJ Data ${rec.pj2_info.name} NIP: ${rec.pj2_info.nip ?? '-'} pada ${fmtDate(rec.pj2_submitted_at)}`;
+    qrPj2.value = await QRCode.toDataURL(text, { width: 128, margin: 1 });
+  }
+}
+
+function maskName(name: string): string {
+  if (!name) return '';
+  return name.split(' ').map(word => {
+    if (!word) return '';
+    return word[0] + '*'.repeat(Math.max(0, word.length - 1));
+  }).join(' ');
+}
+
+async function downloadValidasiPdf() {
+  const rec = validasiRecord.value;
+  if (!rec) return;
+
+  const fmtDate = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'long', year: 'numeric' }) : '-';
+
+  const twRoman = ['I', 'II', 'III', 'IV'][validasiModalTw.value - 1] ?? String(validasiModalTw.value);
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+  const pageW = doc.internal.pageSize.getWidth();
+  let y = 15;
+
+  // ── Header ──────────────────────────────────────────────────────────────────
+  doc.setFontSize(13);
+  doc.setFont('helvetica', 'bold');
+  doc.text('VALIDASI DATA INDIKATOR MUTU', pageW / 2, y, { align: 'center' });
+  y += 7;
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.text(`Triwulan ${twRoman} – Tahun ${props.tahun}`, pageW / 2, y, { align: 'center' });
+  y += 5;
+  if (validasiModalTim.value) {
+    doc.text(`Tim : ${validasiModalTim.value}`, pageW / 2, y, { align: 'center' });
+    y += 5;
+  }
+
+  // ── Indikator Table ──────────────────────────────────────────────────────────
+  const detail: any[] = rec.detail ?? [];
+  const tableBody = detail.map((row: any, i: number) => [
+    i + 1,
+    row.nama_indikator ?? '-',
+    row.pj1_jawaban ?? '-',
+    row.pj2_jawaban ?? '-',
+    row.nilai === 1 ? '1' : row.nilai === 0 ? '0' : '-',
+  ]);
+
+  autoTable(doc, {
+    startY: y + 3,
+    head: [['No', 'Nama Indikator', 'Pengumpul Data I', 'Pengumpul Data II', 'Kesesuaian']],
+    body: tableBody,
+    styles: { fontSize: 8, cellPadding: 2 },
+    headStyles: { fillColor: [15, 118, 110], textColor: 255, fontStyle: 'bold', halign: 'center' },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      2: { halign: 'center', cellWidth: 28 },
+      3: { halign: 'center', cellWidth: 28 },
+      4: { halign: 'center', cellWidth: 28 },
+    },
+    margin: { left: 14, right: 14 },
+  });
+
+  y = (doc as any).lastAutoTable.finalY + 8;
+
+  // ── Summary ──────────────────────────────────────────────────────────────────
+  const jumlah = rec.jumlah_kesesuaian ?? 0;
+  const persen = rec.persentase_kesesuaian != null ? Number(rec.persentase_kesesuaian).toFixed(2) : '-';
+  const isValid = rec.is_valid;
+  const statusText = isValid === true ? 'VALID' : isValid === false ? 'TIDAK VALID' : 'Belum selesai';
+
+  doc.setFontSize(9);
+  doc.setFont('helvetica', 'bold');
+  doc.text(`Jumlah Kesesuaian : ${jumlah} dari ${detail.length} indikator`, 14, y);
+  y += 5;
+  doc.text(`Persentase        : ${persen}%`, 14, y);
+  y += 5;
+  doc.text(`Status            : ${statusText}`, 14, y);
+  y += 10;
+
+  // ── QR Codes ─────────────────────────────────────────────────────────────────
+  if (qrPj1.value || qrPj2.value) {
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Tanda Tangan Digital', 14, y);
+    y += 5;
+
+    const qrSize = 35;
+    const col2X = pageW / 2 + 7;
+
+    if (qrPj1.value) {
+      doc.addImage(qrPj1.value, 'PNG', 14, y, qrSize, qrSize);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Pengumpul Data I', 14, y + qrSize + 3);
+      if (rec.pj1_info?.name) doc.text(maskName(rec.pj1_info.name), 14, y + qrSize + 7);
+      if (rec.pj1_submitted_at) doc.text(fmtDate(rec.pj1_submitted_at), 14, y + qrSize + 11);
+    }
+
+    if (qrPj2.value) {
+      doc.addImage(qrPj2.value, 'PNG', col2X, y, qrSize, qrSize);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Pengumpul Data II', col2X, y + qrSize + 3);
+      if (rec.pj2_info?.name) doc.text(maskName(rec.pj2_info.name), col2X, y + qrSize + 7);
+      if (rec.pj2_submitted_at) doc.text(fmtDate(rec.pj2_submitted_at), col2X, y + qrSize + 11);
+    }
+  }
+
+  const fileName = `validasi indikator ${validasiModalTim.value ? validasiModalTim.value + ' - ' : ''}TW ${twRoman} tahun ${props.tahun}.pdf`;
+  doc.save(fileName);
+}
+
+// Helper: label TW
+const twLabel = (tw: number) => `TW ${['I','II','III','IV'][tw-1]}`;
+
+// Badge color class for validasi status
+function validasiBadgeClass(status: { is_required: boolean; is_submitted: boolean; is_valid: boolean | null } | undefined): string {
+  if (!status || !status.is_required) return 'bg-gray-100 text-gray-500';
+  if (status.is_submitted && status.is_valid === true)  return 'bg-green-100 text-green-700 border-green-300';
+  if (status.is_submitted && status.is_valid === false) return 'bg-red-100 text-red-700 border-red-300';
+  return 'bg-amber-100 text-amber-700 border-amber-300';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function navigateQuarter(direction: 'prev' | 'next') {
   if (!isUnitSelected.value) return;
@@ -2193,7 +2568,7 @@ async function printPenilaian() {
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(15);
   doc.setTextColor(30, 30, 30);
-  doc.text('Laporan Penilaian PJ Data', marginL, y);
+  doc.text('Laporan Supervisi PJ Data', marginL, y);
   y += 7;
 
   doc.setFont('helvetica', 'normal');
@@ -2624,8 +2999,14 @@ async function printPenilaian() {
                 </div>
               </div>
               <div v-else class="flex flex-col items-end gap-1.5">
-                <div class="text-blue-700 text-sm">
-                  Bulan berjalan: <span class="font-medium">{{ monthLabel(currentMonthKey) }}</span>
+                <div class="text-sm">
+                  <template v-if="!isViewingCurrentMonth">
+                    <span class="font-semibold text-amber-700">{{ monthLabelFull(viewMonthKey) }} {{ props.tahun }}</span>
+                    <span class="text-[10px] text-amber-600 ml-1 font-medium">View only</span>
+                  </template>
+                  <template v-else>
+                    <span class="text-blue-700">Bulan berjalan: <span class="font-medium">{{ monthLabel(currentMonthKey) }}</span></span>
+                  </template>
                 </div>
               </div>
             </div>
@@ -2641,7 +3022,7 @@ async function printPenilaian() {
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
                 </svg>
-                {{ isPenilaianPjDataRole ? 'Validasi Data / Penilaian PJ Data' : 'Daftar Approval Indikator per Tim' }} - Bulan {{ monthLabel(viewMonthKey) }}
+                {{ isPenilaianPjDataRole ? 'Validasi Data / Supervisi PJ Data' : 'Daftar Approval Indikator per Tim' }} - Bulan {{ monthLabel(viewMonthKey) }}
               </h4>
               <!-- Filter approve status -->
               <div class="flex items-center gap-1.5">
@@ -2690,16 +3071,17 @@ async function printPenilaian() {
                   <th class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ isPenilaianPjDataRole ? 'Sudah Validasi' : 'Sudah Approve' }}</th>
                   <th class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{{ isPenilaianPjDataRole ? 'Belum Validasi' : 'Belum Approve' }}</th>
                   <th v-if="!isPenilaianPjDataRole" class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">Rejected</th>
-                  <th v-if="!props.isAdmin" class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">Penilaian PJ</th>
+                  <th v-if="!props.isAdmin" class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">Supervisi PJ Data</th>
+                  <th v-if="props.isAdmin || isPjDataRole" class="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">Validasi</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-200">
                 <tr v-for="(tim, idx) in timApprovalPaginated" :key="tim.nama_tim" class="hover:bg-gray-50">
                   <td class="px-4 py-3">
                     <button
-                      @click="(!isPenilaianPjDataRole && tim.has_penilai && !tim.penilaian_pj?.is_submitted) ? openTimPenilaianModal(tim) : openApproveModal(tim.nama_tim)"
+                      @click="(isPenilaianPjDataRole || (tim.has_penilai && !tim.penilaian_pj?.is_submitted)) ? openTimPenilaianModal(tim) : openApproveModal(tim.nama_tim)"
                       class="p-2 rounded-lg bg-amber-100 text-amber-700 hover:bg-amber-200 transition-colors"
-                      :title="(!isPenilaianPjDataRole && tim.has_penilai && !tim.penilaian_pj?.is_submitted) ? 'Isi / Lihat Penilaian PJ Data' : 'Detail Verifikasi Indikator'"
+                      :title="isPenilaianPjDataRole ? 'Isi / Lihat Supervisi PJ Data' : ((tim.has_penilai && !tim.penilaian_pj?.is_submitted) ? 'Isi / Lihat Supervisi PJ Data' : 'Detail Verifikasi Indikator')"
                     >
                       <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -2787,7 +3169,7 @@ async function printPenilaian() {
                           : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200 hover:shadow-sm'"
                       :title="(tim.approved + tim.not_approved) < tim.total_indikator || tim.total_indikator === 0
                         ? 'Semua indikator harus terisi terlebih dahulu'
-                        : 'Isi / Lihat Penilaian PJ Data'"
+                        : 'Isi / Lihat Supervisi PJ Data'"
                     >
                       <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
@@ -2795,10 +3177,29 @@ async function printPenilaian() {
                       <span>{{ tim.penilaian_pj?.nilai ?? 'Isi' }}</span>
                     </button>
                   </td>
+                  <!-- Validasi Column -->
+                  <td v-if="props.isAdmin || isPjDataRole" class="px-4 py-3 text-center">
+                    <div class="flex items-center justify-center gap-1 flex-wrap">
+                      <button
+                        v-for="tw in [1,2,3,4]"
+                        :key="tw"
+                        @click="props.isAdmin
+                          ? toggleRequired(tim.nama_tim, tw)
+                          : (tim.validasi_status?.[tw]?.is_required ? openValidasiModal(tim.nama_tim, tw) : undefined)"
+                        :disabled="!props.isAdmin && !tim.validasi_status?.[tw]?.is_required"
+                        :class="validasiBadgeClass(tim.validasi_status?.[tw])"
+                        :title="props.isAdmin
+                          ? (tim.validasi_status?.[tw]?.is_required ? 'Klik nonaktifkan wajib validasi TW '+tw : 'Klik wajibkan validasi TW '+tw)
+                          : (tim.validasi_status?.[tw]?.is_required ? 'Klik untuk isi validasi TW '+tw : 'Tidak diperlukan')"
+                      >
+                        {{ twLabel(tw) }}
+                      </button>
+                    </div>
+                  </td>
                 </tr>
                 <!-- Empty state -->
                 <tr v-if="timApprovalPaginated.length === 0">
-                  <td :colspan="props.isAdmin ? 7 : (isPenilaianPjDataRole ? 7 : 8)" class="px-4 py-8 text-center">
+                  <td :colspan="props.isAdmin ? 8 : (isPenilaianPjDataRole ? 7 : 9)" class="px-4 py-8 text-center">
                     <div class="flex flex-col items-center gap-2 text-gray-400">
                       <svg class="w-10 h-10 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -3137,6 +3538,11 @@ async function printPenilaian() {
       ✓ Sudah Direvisi
     </span>
   </div>
+  <!-- Last update by -->
+  <div v-if="ind.updated_by" class="mt-1.5 flex items-center gap-1 text-[10px] text-gray-400 italic">
+    <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+    <span>{{ ind.updated_by }}<span v-if="ind.updated_at" class="ml-1 not-italic text-gray-300">· {{ ind.updated_at }}</span></span>
+  </div>
 </td>
                   <td class="border px-2 py-2 align-top" :rowspan="4">{{ getStandarForTw(ind, props.quarter).standar }}</td>
 
@@ -3218,9 +3624,11 @@ async function printPenilaian() {
                 <tr :class="getIndicatorRowClass(ind)">
                   <td class="border px-2 py-2 font-semibold">LAMPIRAN</td>
 
-                  <td v-for="month in displayMonths" :key="month" class="border px-2 py-2">
+                  <td v-for="month in displayMonths" :key="month" class="border px-2 py-2 text-center">
+                    <!-- Bulan belum tiba: tampilkan tanda dash -->
+                    <template v-if="isAfterViewMonth(month)">—</template>
                     <!-- Jika BELUM ada file: Tampilkan icon Upload -->
-                    <div v-if="!ind.att[month]" class="flex items-center justify-center gap-1">
+                    <div v-else-if="!ind.att[month]" class="flex items-center justify-center gap-1">
                       <input type="file" :id="`f-${ind.id}-${month}`" class="hidden" accept=".pdf,.xlsx,.xls"
                              :disabled="!isWindowOpen(month) || isValidated(ind, month) || (isApproved(ind, month) && !hasKomentarAdmin(ind, month))" @change="onUpload(ind, month, $event)" />
                       <label :for="`f-${ind.id}-${month}`"
@@ -3257,8 +3665,11 @@ async function printPenilaian() {
                   <td class="border px-2 py-2 font-semibold">HASIL</td>
 
                   <td v-for="month in displayMonths" :key="month" class="border px-2 py-2 text-center">
-                    {{ fmtPctCapped(ind, hasil(ind, ind.m[month])) }}
-                    <span v-if="isOverCap(ind, hasil(ind, ind.m[month]))" class="text-[10px] text-gray-400 block">({{ fmtPct(ind, hasil(ind, ind.m[month])) }})</span>
+                    <template v-if="isAfterViewMonth(month)">—</template>
+                    <template v-else>
+                      {{ fmtPctCapped(ind, hasil(ind, ind.m[month])) }}
+                      <span v-if="isOverCap(ind, hasil(ind, ind.m[month]))" class="text-[10px] text-gray-400 block">({{ fmtPct(ind, hasil(ind, ind.m[month])) }})</span>
+                    </template>
                   </td>
 
                   <td class="border px-2 py-2 text-center font-semibold">
@@ -3312,6 +3723,19 @@ async function printPenilaian() {
           </div>
         </div>
 
+        <!-- Last Update By — bottom right corner -->
+        <div v-if="lastUpdatedInfo && isUnitSelected" class="mt-2 flex justify-end">
+          <span class="flex items-center gap-1 text-[11px] text-gray-400 italic">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
+            </svg>
+            Terakhir diisi oleh:
+            <span class="font-medium not-italic text-gray-500 ml-0.5">{{ lastUpdatedInfo.name }}</span>
+            <span class="mx-1 text-gray-300">·</span>
+            <span class="not-italic text-gray-400">{{ lastUpdatedInfo.time }}</span>
+          </span>
+        </div>
+
         <!-- Empty State - hidden for admin/kepala when viewing approval table, hidden for Penilai PJ Data -->
         <div v-if="(!isUnitSelected || (data.length === 0 && isUnitSelected && !props.canApprove)) && !isPenilaianPjDataRole" class="flex flex-col items-center justify-center py-16 text-gray-400">
           <svg class="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -3334,6 +3758,71 @@ async function printPenilaian() {
           <p class="text-xs mt-1">Tidak ditemukan indikator dengan kata kunci "{{ searchQuery }}"</p>
         </div>
 
+        <!-- ===== VALIDASI DATA INDIKATOR (untuk PJ Data) ===== -->
+        <div
+          v-if="isUnitSelected && isPjDataRole && pjDataValidasiStatus && Object.values(pjDataValidasiStatus).some((s: any) => s.is_required)"
+          class="mt-4 rounded-xl border border-teal-200 bg-gradient-to-br from-teal-50 to-white p-5 shadow-sm"
+        >
+          <h4 class="mb-3 flex items-center gap-2 text-sm font-semibold text-teal-800">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7l2 2 4-4"/>
+            </svg>
+            Validasi Data Indikator Mutu — Tahun {{ tahun }}
+          </h4>
+          <div class="grid grid-cols-4 gap-2">
+            <div
+              v-for="tw in [1,2,3,4]"
+              :key="tw"
+              class="rounded-lg border p-3 text-center transition-all"
+              :class="!pjDataValidasiStatus?.[tw]?.is_required
+                ? 'bg-gray-50 border-gray-100 opacity-40'
+                : pjDataValidasiStatus?.[tw]?.is_submitted && pjDataValidasiStatus?.[tw]?.is_valid
+                  ? 'bg-green-50 border-green-200 cursor-pointer hover:shadow-md'
+                  : pjDataValidasiStatus?.[tw]?.is_submitted && pjDataValidasiStatus?.[tw]?.is_valid === false
+                    ? 'bg-red-50 border-red-200 cursor-pointer hover:shadow-md'
+                    : isValidasiPeriodOpen(tw)
+                      ? 'bg-teal-50 border-teal-200 cursor-pointer hover:shadow-md hover:border-teal-400'
+                      : 'bg-amber-50 border-amber-200 opacity-60'"
+              @click="pjDataValidasiStatus?.[tw]?.is_required ? openValidasiModal(pjDataTimName, tw) : undefined"
+            >
+              <p class="text-xs font-bold mb-1"
+                :class="!pjDataValidasiStatus?.[tw]?.is_required ? 'text-gray-400'
+                  : pjDataValidasiStatus?.[tw]?.is_submitted && pjDataValidasiStatus?.[tw]?.is_valid ? 'text-green-700'
+                  : pjDataValidasiStatus?.[tw]?.is_submitted ? 'text-red-600'
+                  : 'text-teal-700'">
+                TW {{ ['I','II','III','IV'][tw-1] }}
+              </p>
+              <template v-if="pjDataValidasiStatus?.[tw]?.is_required">
+                <span v-if="pjDataValidasiStatus?.[tw]?.is_submitted && pjDataValidasiStatus?.[tw]?.is_valid"
+                  class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-green-100 text-green-700">
+                  Valid ✓
+                </span>
+                <span v-else-if="pjDataValidasiStatus?.[tw]?.is_submitted && pjDataValidasiStatus?.[tw]?.is_valid === false"
+                  class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-red-100 text-red-600">
+                  Tidak Valid ✗
+                </span>
+                <span v-else-if="isValidasiPeriodOpen(tw)"
+                  class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-teal-100 text-teal-700">
+                  Isi Validasi →
+                </span>
+                <span v-else class="inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-700">
+                  Ditutup
+                </span>
+                <p v-if="pjDataValidasiStatus?.[tw]?.persentase !== null && pjDataValidasiStatus?.[tw]?.is_submitted"
+                  class="text-[10px] text-gray-500 mt-1">
+                  {{ pjDataValidasiStatus?.[tw]?.persentase }}%
+                </p>
+              </template>
+              <template v-else>
+                <span class="text-[10px] text-gray-400">—</span>
+              </template>
+            </div>
+          </div>
+          <p class="mt-2 text-[10px] text-teal-600 italic">
+            Klik kartu TW untuk mengisi validasi. Batas input: tanggal 5 bulan setelah akhir TW.
+          </p>
+        </div>
+
         <!-- ===== HASIL PENILAIAN PJ DATA ===== -->
         <div
           v-if="isUnitSelected && !isAdmin && isPjDataRole"
@@ -3343,7 +3832,7 @@ async function printPenilaian() {
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            Hasil Penilaian PJ Data — Triwulan {{ quarter }} Tahun {{ tahun }}
+            Hasil Supervisi PJ Data — Triwulan {{ quarter }} Tahun {{ tahun }}
           </h4>
           <div class="grid grid-cols-3 gap-3">
             <div
@@ -3578,7 +4067,7 @@ async function printPenilaian() {
           <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span class="text-xs font-semibold text-indigo-700">Penilaian PJ Data:</span>
+          <span class="text-xs font-semibold text-indigo-700">Supervisi PJ Data:</span>
         </div>
         <span
           class="inline-block rounded-full px-3 py-0.5 text-xs font-bold border"
@@ -4179,7 +4668,7 @@ async function printPenilaian() {
           <!-- Header -->
           <div class="flex items-center justify-between rounded-t-2xl bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex-shrink-0">
             <div>
-              <h4 class="text-base font-bold text-white">Penilaian PJ Data</h4>
+              <h4 class="text-base font-bold text-white">Supervisi PJ Data</h4>
               <p class="text-xs text-indigo-200 mt-0.5">
                 {{ props.selectedUnit?.nama_unit || selectedUnitCode }} &bull; {{ monthLabelFull(idxToKey(selectedPenilaianBulan - 1)) }} {{ props.tahun }}
               </p>
@@ -4361,7 +4850,7 @@ async function printPenilaian() {
           <!-- Header -->
           <div class="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex items-center justify-between flex-shrink-0">
             <div>
-              <h3 class="text-base font-bold text-white">Penilaian PJ Data</h3>
+              <h3 class="text-base font-bold text-white">Supervisi PJ Data</h3>
               <p class="text-xs text-indigo-200 mt-0.5">{{ selectedTimForPenilaian.nama_tim }} — {{ NAMA_BULAN_FULL[props.viewMonth] }} {{ props.tahun }}</p>
             </div>
             <div class="flex items-center gap-2">
@@ -4550,6 +5039,244 @@ async function printPenilaian() {
               Berikutnya →
             </button>
             <div v-else></div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- MODAL: VALIDASI DATA INDIKATOR MUTU                           -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <Teleport to="body">
+      <div v-if="showValidasiModal" class="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
+          <!-- Header -->
+          <div class="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-teal-600 to-teal-700 shrink-0">
+            <div>
+              <h3 class="text-base font-bold text-white tracking-wide">VALIDASI DATA INDIKATOR MUTU</h3>
+              <p class="text-xs text-teal-100 mt-0.5">
+                TW {{ validasiModalTw }} &bull;
+                {{ validasiModalTim }} &bull;
+                Tahun {{ props.tahun }}
+              </p>
+            </div>
+            <button @click="closeValidasiModal" class="text-white/70 hover:text-white transition-colors">
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Loading -->
+          <div v-if="validasiLoading" class="flex-1 flex items-center justify-center py-16">
+            <div class="flex flex-col items-center gap-3 text-teal-600">
+              <svg class="h-8 w-8 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+              </svg>
+              <p class="text-sm font-medium">Memuat data...</p>
+            </div>
+          </div>
+
+          <!-- Content -->
+          <div v-else-if="validasiRecord" class="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            <!-- PJ Data info chips -->
+            <div class="flex flex-wrap gap-2 text-xs">
+              <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-teal-50 border border-teal-200 text-teal-700 font-medium">
+                <span class="w-2 h-2 rounded-full bg-teal-400 shrink-0"></span>
+                Pengumpul Data I:
+                <span class="font-semibold">{{ validasiRecord.pj1_info ? maskName(validasiRecord.pj1_info.name) : 'Belum ada' }}</span>
+              </span>
+              <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 font-medium">
+                <span class="w-2 h-2 rounded-full bg-indigo-400 shrink-0"></span>
+                Pengumpul Data II:
+                <span class="font-semibold">{{ validasiRecord.pj2_info ? maskName(validasiRecord.pj2_info.name) : 'Belum ada' }}</span>
+              </span>
+            </div>
+
+            <!-- Table -->
+            <div class="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
+              <table class="min-w-full text-xs">
+                <thead class="bg-gray-50">
+                  <tr>
+                    <th class="px-3 py-2.5 text-left font-semibold text-gray-600 border-b border-gray-200 w-8">#</th>
+                    <th class="px-3 py-2.5 text-left font-semibold text-gray-600 border-b border-gray-200">Nama Indikator</th>
+                    <th class="px-3 py-2.5 text-center font-semibold text-teal-600 border-b border-gray-200 w-32">Pengumpul Data I</th>
+                    <th class="px-3 py-2.5 text-center font-semibold text-indigo-600 border-b border-gray-200 w-32">Pengumpul Data II</th>
+                    <th class="px-3 py-2.5 text-center font-semibold text-gray-600 border-b border-gray-200 w-20">Nilai</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                  <tr v-for="(row, i) in (validasiRecord.detail ?? [])" :key="row.indikator_id" class="hover:bg-gray-50 transition-colors">
+                    <td class="px-3 py-2 text-center text-gray-400">{{ i + 1 }}</td>
+                    <td class="px-3 py-2 text-gray-700">{{ row.nama_indikator }}</td>
+                    <!-- Pengumpul Data I -->
+                    <td class="px-3 py-2 text-center">
+                      <select
+                        v-model="row.pj1_jawaban"
+                        :disabled="!canEditPj1"
+                        class="w-16 text-center rounded-lg border px-1.5 py-1 text-xs font-semibold transition-colors"
+                        :class="!canEditPj1
+                          ? 'bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed'
+                          : 'bg-teal-50 text-teal-700 border-teal-200 hover:border-teal-400 cursor-pointer focus:outline-none focus:ring-1 focus:ring-teal-400'"
+                      >
+                        <option :value="null">—</option>
+                        <option value="D">D</option>
+                        <option value="N">N</option>
+                      </select>
+                    </td>
+                    <!-- Pengumpul Data II -->
+                    <td class="px-3 py-2 text-center">
+                      <select
+                        v-model="row.pj2_jawaban"
+                        :disabled="!canEditPj2"
+                        class="w-16 text-center rounded-lg border px-1.5 py-1 text-xs font-semibold transition-colors"
+                        :class="!canEditPj2
+                          ? 'bg-gray-50 text-gray-400 border-gray-100 cursor-not-allowed'
+                          : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:border-indigo-400 cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-400'"
+                      >
+                        <option :value="null">—</option>
+                        <option value="D">D</option>
+                        <option value="N">N</option>
+                      </select>
+                    </td>
+                    <!-- Nilai -->
+                    <td class="px-3 py-2 text-center">
+                      <span v-if="row.pj1_jawaban && row.pj2_jawaban"
+                        class="inline-flex items-center justify-center w-7 h-7 rounded-full text-xs font-bold"
+                        :class="row.pj1_jawaban === row.pj2_jawaban ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'"
+                      >{{ row.pj1_jawaban === row.pj2_jawaban ? '1' : '0' }}</span>
+                      <span v-else class="text-gray-300">—</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Summary Footer -->
+            <div class="grid grid-cols-3 gap-3 text-center">
+              <div class="rounded-xl bg-blue-50 border border-blue-100 px-4 py-3">
+                <p class="text-xs text-blue-500 font-medium mb-1">Jumlah Kesesuaian</p>
+                <p class="text-xl font-bold text-blue-700">
+                  {{ (validasiRecord.detail ?? []).filter((r: any) => r.pj1_jawaban && r.pj2_jawaban && r.pj1_jawaban === r.pj2_jawaban).length }}
+                  <span class="text-sm font-normal text-blue-400">/ {{ (validasiRecord.detail ?? []).length }}</span>
+                </p>
+              </div>
+              <div class="rounded-xl bg-amber-50 border border-amber-100 px-4 py-3">
+                <p class="text-xs text-amber-500 font-medium mb-1">Persentase Kesesuaian</p>
+                <p class="text-xl font-bold text-amber-700">
+                  {{ (() => {
+                    const total = (validasiRecord.detail ?? []).length;
+                    if (!total) return '—';
+                    const ok = (validasiRecord.detail ?? []).filter((r: any) => r.pj1_jawaban && r.pj2_jawaban && r.pj1_jawaban === r.pj2_jawaban).length;
+                    return (ok / total * 100).toFixed(1) + '%';
+                  })() }}
+                </p>
+              </div>
+              <div class="rounded-xl border px-4 py-3"
+                :class="(() => {
+                  const total = (validasiRecord.detail ?? []).length;
+                  if (!total) return 'bg-gray-50 border-gray-100';
+                  const ok = (validasiRecord.detail ?? []).filter((r: any) => r.pj1_jawaban && r.pj2_jawaban && r.pj1_jawaban === r.pj2_jawaban).length;
+                  const pct = ok / total * 100;
+                  return pct >= 90 ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100';
+                })()"
+              >
+                <p class="text-xs font-medium mb-1"
+                  :class="(() => {
+                    const total = (validasiRecord.detail ?? []).length;
+                    if (!total) return 'text-gray-400';
+                    const ok = (validasiRecord.detail ?? []).filter((r: any) => r.pj1_jawaban && r.pj2_jawaban && r.pj1_jawaban === r.pj2_jawaban).length;
+                    return ok / total * 100 >= 90 ? 'text-green-500' : 'text-red-500';
+                  })()">Status Validasi</p>
+                <p class="text-xl font-bold"
+                  :class="(() => {
+                    const total = (validasiRecord.detail ?? []).length;
+                    if (!total) return 'text-gray-400';
+                    const ok = (validasiRecord.detail ?? []).filter((r: any) => r.pj1_jawaban && r.pj2_jawaban && r.pj1_jawaban === r.pj2_jawaban).length;
+                    return ok / total * 100 >= 90 ? 'text-green-700' : 'text-red-600';
+                  })()">
+                  {{ (() => {
+                    const total = (validasiRecord.detail ?? []).length;
+                    if (!total) return '—';
+                    const ok = (validasiRecord.detail ?? []).filter((r: any) => r.pj1_jawaban && r.pj2_jawaban && r.pj1_jawaban === r.pj2_jawaban).length;
+                    if (!validasiRecord.pj1_info || !validasiRecord.pj2_info) return 'Belum Selesai';
+                    return ok / total * 100 >= 90 ? 'Valid ✓' : 'Tidak Valid ✗';
+                  })() }}
+                </p>
+              </div>
+            </div>
+
+            <!-- QR Codes section (only if both submitted) -->
+            <div v-if="validasiRecord.pj1_info && validasiRecord.pj2_info && (qrPj1 || qrPj2)" class="grid grid-cols-2 gap-4 pt-2">
+              <div v-if="qrPj1" class="flex flex-col items-center gap-2 p-4 rounded-xl border border-teal-100 bg-teal-50">
+                <img :src="qrPj1" alt="QR PJ Data I" class="w-32 h-32"/>
+                <div class="text-center">
+                  <p class="text-xs font-semibold text-teal-700">Pengumpul Data I</p>
+                  <p class="text-xs text-teal-600">{{ maskName(validasiRecord.pj1_info.name) }}</p>
+                  <p class="text-[10px] text-teal-400">{{ validasiRecord.pj1_submitted_at ? new Date(validasiRecord.pj1_submitted_at).toLocaleDateString('id-ID', {day:'2-digit',month:'long',year:'numeric'}) : '' }}</p>
+                </div>
+              </div>
+              <div v-if="qrPj2" class="flex flex-col items-center gap-2 p-4 rounded-xl border border-indigo-100 bg-indigo-50">
+                <img :src="qrPj2" alt="QR PJ Data II" class="w-32 h-32"/>
+                <div class="text-center">
+                  <p class="text-xs font-semibold text-indigo-700">Pengumpul Data II</p>
+                  <p class="text-xs text-indigo-600">{{ maskName(validasiRecord.pj2_info.name) }}</p>
+                  <p class="text-[10px] text-indigo-400">{{ validasiRecord.pj2_submitted_at ? new Date(validasiRecord.pj2_submitted_at).toLocaleDateString('id-ID', {day:'2-digit',month:'long',year:'numeric'}) : '' }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer Actions -->
+          <div class="flex items-center justify-between px-6 py-3 border-t border-gray-100 bg-gray-50 shrink-0 gap-2">
+            <div class="flex items-center gap-2">
+              <button @click="closeValidasiModal" class="rounded-lg border border-gray-200 bg-white px-4 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors">
+                Tutup
+              </button>
+              <button
+                v-if="validasiRecord?.is_submitted"
+                @click="downloadValidasiPdf()"
+                class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-4 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <svg class="h-3.5 w-3.5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+                </svg>
+                Download PDF
+              </button>
+            </div>
+            <div class="flex items-center gap-2">
+              <!-- Admin: save as PJ1 or PJ2 -->
+              <template v-if="props.isAdmin">
+                <button
+                  @click="saveValidasi(1)"
+                  :disabled="validasiSaving"
+                  class="flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                >
+                  <svg v-if="validasiSaving" class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                  Simpan sbg PJ Data I
+                </button>
+                <button
+                  @click="saveValidasi(2)"
+                  :disabled="validasiSaving"
+                  class="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                >
+                  <svg v-if="validasiSaving" class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                  Simpan sbg PJ Data II
+                </button>
+              </template>
+              <!-- PJ Data: auto-detect slot -->
+              <template v-else-if="isPjDataRole && (canEditPj1 || canEditPj2)">
+                <button
+                  @click="saveValidasi(canEditPj1 ? 1 : 2)"
+                  :disabled="validasiSaving"
+                  class="flex items-center gap-1.5 rounded-lg bg-teal-600 px-4 py-2 text-xs font-semibold text-white hover:bg-teal-700 disabled:opacity-50 transition-colors"
+                >
+                  <svg v-if="validasiSaving" class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                  Simpan
+                </button>
+              </template>
+            </div>
           </div>
         </div>
       </div>

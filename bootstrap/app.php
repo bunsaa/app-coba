@@ -33,6 +33,8 @@ return Application::configure(basePath: dirname(__DIR__))
             '/penilaian-perilaku-pegawai/*',
             '/pengaturan-penilaian/*',
             '/penilaian-pj-data/*',
+            '/pengajuan-indikator',
+            '/pengajuan-indikator/*',
         ]);
 
         $middleware->web(append: [
