@@ -2,9 +2,7 @@ services:
 
   # ── PHP Laravel App ─────────────────────────────────────────
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: piaa05/app-coba:latest
     container_name: mutu_app
     restart: unless-stopped
     working_dir: /var/www
@@ -31,9 +29,7 @@ services:
 
   # ── Nginx Web Server ─────────────────────────────────────────
   webserver:
-    build:
-      context: ./docker/nginx
-      dockerfile: Dockerfile
+    image: piaa05/app-coba-nginx:latest
     container_name: mutu_nginx
     restart: unless-stopped
     ports:
