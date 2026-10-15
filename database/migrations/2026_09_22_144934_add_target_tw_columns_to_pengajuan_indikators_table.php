@@ -9,12 +9,18 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('pengajuan_indikators', function (Blueprint $table) {
-            $table->string('target_tw1', 100)->nullable()->after('denominator');
-            $table->string('target_tw2', 100)->nullable()->after('target_tw1');
-            $table->string('target_tw3', 100)->nullable()->after('target_tw2');
-            $table->string('target_tw4', 100)->nullable()->after('target_tw3');
-            $table->string('satuan', 100)->nullable()->after('target_tw4');
-            $table->string('satuan_waktu', 50)->nullable()->after('satuan');
+            if (!Schema::hasColumn('pengajuan_indikators', 'target_tw1'))
+                $table->string('target_tw1', 100)->nullable()->after('denominator');
+            if (!Schema::hasColumn('pengajuan_indikators', 'target_tw2'))
+                $table->string('target_tw2', 100)->nullable()->after('target_tw1');
+            if (!Schema::hasColumn('pengajuan_indikators', 'target_tw3'))
+                $table->string('target_tw3', 100)->nullable()->after('target_tw2');
+            if (!Schema::hasColumn('pengajuan_indikators', 'target_tw4'))
+                $table->string('target_tw4', 100)->nullable()->after('target_tw3');
+            if (!Schema::hasColumn('pengajuan_indikators', 'satuan'))
+                $table->string('satuan', 100)->nullable()->after('target_tw4');
+            if (!Schema::hasColumn('pengajuan_indikators', 'satuan_waktu'))
+                $table->string('satuan_waktu', 50)->nullable()->after('satuan');
         });
     }
 
