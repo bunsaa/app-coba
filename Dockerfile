@@ -13,12 +13,13 @@ ENV SKIP_WAYFINDER=true
 RUN npm run build
 
 # ============================================================
-# Stage 2 — PHP 8.3 FPM (production)
+# Stage 2 — PHP 8.3 FPM + Nginx (single container)
 # ============================================================
 FROM php:8.3-fpm-alpine
 
-# 1. Install system libraries (dipisah dari php ext install agar cache lebih efisien)
+# 1. Install system libraries + nginx + supervisor
 RUN apk add --no-cache \
+    nginx supervisor \
     git curl bash zip unzip \
     libzip-dev \
     libpng-dev libjpeg-turbo-dev freetype-dev \
@@ -48,9 +49,16 @@ RUN chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache \
     && chmod -R 775 /var/www/storage \
     && chmod -R 775 /var/www/bootstrap/cache
 
-# 7. Entrypoint script (strip Windows CRLF line endings)
+# 7. Nginx config (fastcgi ke 127.0.0.1:9000 — satu container)
+COPY docker/nginx/default.conf /etc/nginx/http.d/default.conf
+
+# 8. Supervisord config (kelola nginx + php-fpm sekaligus)
+COPY docker/supervisord.conf /etc/supervisord.conf
+
+# 9. Entrypoint script (strip Windows CRLF line endings)
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
 
-EXPOSE 9000
+EXPOSE 80
+
 ENTRYPOINT ["/entrypoint.sh"]

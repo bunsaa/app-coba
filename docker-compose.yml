@@ -1,21 +1,21 @@
 services:
 
-  # ── PHP Laravel App ─────────────────────────────────────────
+  # ── PHP Laravel App + Nginx (single container) ────────────
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: mutu_app
     restart: unless-stopped
-    working_dir: /var/www
+    ports:
+      - "2005:80"
     volumes:
-      - public_data:/var/www/public
       - storage_data:/var/www/storage
       - cache_data:/var/www/bootstrap/cache
     environment:
       APP_ENV: production
       APP_KEY: ${APP_KEY}
-      APP_URL: http://localhost:8085
+      APP_URL: http://localhost:2005
       DB_CONNECTION: mysql
       DB_HOST: 172.40.1.179
       DB_PORT: 3306
@@ -29,28 +29,11 @@ services:
     networks:
       - mutu_network
 
-  # ── Nginx Web Server ─────────────────────────────────────────
-  webserver:
-    build:
-      context: ./docker/nginx
-      dockerfile: Dockerfile
-    container_name: mutu_nginx
-    restart: unless-stopped
-    ports:
-      - "8085:80"
-    volumes:
-      - public_data:/var/www/public
-    networks:
-      - mutu_network
-    depends_on:
-      - app
-
 
 networks:
   mutu_network:
     driver: bridge
 
 volumes:
-  public_data:
   storage_data:
   cache_data:

@@ -26,5 +26,5 @@ php artisan config:cache
 php artisan route:cache
 php artisan view:cache || echo "==> view:cache skipped (non-fatal)"
 
-echo "==> Starting PHP-FPM..."
-exec php-fpm
+echo "==> Starting Nginx + PHP-FPM via supervisord..."
+exec supervisord -c /etc/supervisord.conf
