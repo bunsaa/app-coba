@@ -2,7 +2,9 @@ services:
 
   # ── PHP Laravel App ─────────────────────────────────────────
   app:
-    image: piaa05/app-coba:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: mutu_app
     restart: unless-stopped
     working_dir: /var/www
@@ -17,7 +19,7 @@ services:
       DB_CONNECTION: mysql
       DB_HOST: 172.40.1.179
       DB_PORT: 3306
-      DB_DATABASE: tarakan
+      DB_DATABASE: mutu
       DB_USERNAME: root
       DB_PASSWORD: casaos
       QUEUE_CONNECTION: database
@@ -29,7 +31,9 @@ services:
 
   # ── Nginx Web Server ─────────────────────────────────────────
   webserver:
-    image: piaa05/app-coba-nginx:latest
+    build:
+      context: ./docker/nginx
+      dockerfile: Dockerfile
     container_name: mutu_nginx
     restart: unless-stopped
     ports:
